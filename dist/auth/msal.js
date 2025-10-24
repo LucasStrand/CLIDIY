@@ -1,19 +1,21 @@
-import { PublicClientApplication, LogLevel } from '@azure/msal-node';
-import { createFileCachePlugin } from './cache.js';
-import { getSetting, readConfig, writeConfig } from '../util/config.js';
-import open from 'open';
+import { PublicClientApplication, LogLevel } from "@azure/msal-node";
+import { createFileCachePlugin } from "./cache.js";
+import { getSetting, readConfig, writeConfig } from "../util/config.js";
+import open from "open";
 const DEFAULT_SCOPES = [
-    'User.Read',
-    'offline_access',
-    'Chat.ReadWrite',
-    'Chat.Create',
-    'Teams.ReadBasic.All',
-    'ChannelMessage.Send',
+    "User.Read",
+    "User.ReadBasic.All",
+    "offline_access",
+    "Chat.ReadWrite",
+    "Chat.Create",
+    "Team.ReadBasic.All",
+    "Channel.ReadBasic.All",
+    "ChannelMessage.Send",
 ];
 let pca;
 function createMsalApp() {
-    const clientId = getSetting('clientId');
-    const tenantId = getSetting('tenantId') ?? 'organizations';
+    const clientId = getSetting("clientId");
+    const tenantId = getSetting("tenantId") ?? "organizations";
     if (!clientId) {
         throw new Error('Missing clientId. Set TEAMSCLI_CLIENT_ID or save it via "teamscli config set".');
     }
@@ -43,11 +45,17 @@ export async function login(scopes = DEFAULT_SCOPES) {
     };
     const result = await app.acquireTokenByDeviceCode(deviceCodeRequest);
     if (!result)
-        throw new Error('Login failed.');
+        throw new Error("Login failed.");
     // Save account reference
     const account = result.account ?? null;
     if (account) {
-        writeConfig({ ...config, account: { homeAccountId: account.homeAccountId, username: account.username } });
+        writeConfig({
+            ...config,
+            account: {
+                homeAccountId: account.homeAccountId,
+                username: account.username,
+            },
+        });
     }
     return result;
 }
@@ -69,13 +77,17 @@ export async function getAccessToken(scopes = DEFAULT_SCOPES) {
     const app = getMsal();
     const cfg = readConfig();
     if (!cfg.account) {
-        throw new Error('Not logged in. Run: teamscli login');
+        throw new Error("Not logged in. Run: teamscli login");
     }
-    const account = await app.getTokenCache().getAccountByHomeId(cfg.account.homeAccountId);
+    const account = await app
+        .getTokenCache()
+        .getAccountByHomeId(cfg.account.homeAccountId);
     if (!account) {
-        throw new Error('Saved account not found. Run: teamscli login');
+        throw new Error("Saved account not found. Run: teamscli login");
     }
-    const silent = await app.acquireTokenSilent({ scopes, account }).catch(() => null);
+    const silent = await app
+        .acquireTokenSilent({ scopes, account })
+        .catch(() => null);
     if (silent?.accessToken)
         return silent.accessToken;
     // Fallback to device code

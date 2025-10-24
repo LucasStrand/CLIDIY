@@ -1,19 +1,44 @@
 {
-  "name": "clidiy",
+  "name": "teamscli",
   "version": "1.0.0",
   "type": "module",
   "main": "dist/index.js",
-  "bin": { "teamscli": "dist/cli/index.js" },
-  "engines": { "node": ">=18" },
-  "scripts": {
-    "build": "tsc -p .",
-    "dev": "ts-node --esm src/cli/index.ts",
-    "start": "node dist/cli/index.js"
+  "bin": {
+    "teamscli": "dist/cli/index.js"
   },
-  "keywords": [],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p . && node scripts/postbuild.cjs",
+    "dev": "ts-node --esm src/cli/index.ts",
+    "start": "node dist/cli/index.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "teams",
+    "microsoft",
+    "graph",
+    "cli",
+    "chat"
+  ],
   "author": "",
-  "license": "ISC",
-  "description": "",
+  "license": "MIT",
+  "description": "CLI to send Microsoft Teams messages via Microsoft Graph",
+  "homepage": "https://github.com/your-org/CLIDIY#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-org/CLIDIY.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-org/CLIDIY/issues"
+  },
+  "preferGlobal": true,
+  "files": [
+    "dist/**",
+    "README.md",
+    "LICENSE"
+  ],
   "dependencies": {
     "@azure/msal-node": "^3.8.0",
     "@microsoft/microsoft-graph-client": "^3.0.7",
@@ -31,4 +56,3 @@
     "typescript": "^5.9.3"
   }
 }
-
