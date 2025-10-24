@@ -1,1 +1,5 @@
-node_modules\r\ndist\r\n.env\r\n
+node_modules
+dist
+.env
+.vscode
+

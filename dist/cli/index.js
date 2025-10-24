@@ -2,11 +2,10 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
-import dotenv from "dotenv";
 import { login, logout } from "../auth/msal.js";
 import { readConfig, writeConfig, getSetting } from "../util/config.js";
 import { me, listTeams, listChannels, listChats, sendChannelMessage, sendChatMessage, createOrGetOneOnOneChat, listUsers, getUserByIdOrUpn, resolveTeamId, resolveChannelId, } from "../graph/client.js";
-dotenv.config();
+import { runInteractive } from "./tui.js";
 const program = new Command();
 program
     .name("teamscli")
@@ -145,5 +144,14 @@ program
     const res = await sendChatMessage(chatId, opts.message);
     console.log(chalk.green("Message sent."), res?.id ?? "");
 });
-program.parseAsync(process.argv);
+if (process.argv.length <= 2) {
+    // No args: start interactive TUI
+    runInteractive().catch((e) => {
+        console.error(e?.message || e);
+        process.exit(1);
+    });
+}
+else {
+    program.parseAsync(process.argv);
+}
 //# sourceMappingURL=index.js.map
