@@ -22,7 +22,6 @@ if (fs.existsSync(cliDir)) {
       fs.writeFileSync(file, content);
     }
     try {
-      // Make executable on POSIX systems
       fs.chmodSync(file, 0o755);
     } catch {}
   }

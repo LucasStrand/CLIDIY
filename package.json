@@ -1,59 +1,7 @@
 {
-  "name": "teamscli",
-  "version": "1.0.0",
-  "type": "module",
-  "main": "dist/index.js",
-  "bin": {
-    "teamscli": "dist/cli/index.js"
-  },
-  "engines": {
-    "node": ">=18"
-  },
-  "scripts": {
-    "build": "tsc -p . && node scripts/postbuild.cjs",
-    "dev": "ts-node --esm src/cli/index.ts",
-    "start": "node dist/cli/index.js",
-    "prepublishOnly": "npm run build"
-  },
-  "keywords": [
-    "teams",
-    "microsoft",
-    "graph",
-    "cli",
-    "chat"
-  ],
-  "author": "",
-  "license": "MIT",
-  "description": "CLI to send Microsoft Teams messages via Microsoft Graph",
-  "homepage": "https://github.com/your-org/CLIDIY#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/your-org/CLIDIY.git"
-  },
-  "bugs": {
-    "url": "https://github.com/your-org/CLIDIY/issues"
-  },
-  "preferGlobal": true,
-  "files": [
-    "dist/**",
-    "README.md",
-    "LICENSE"
-  ],
-  "dependencies": {
-    "@azure/msal-node": "^3.8.0",
-    "@inquirer/prompts": "^7.9.0",
-    "@microsoft/microsoft-graph-client": "^3.0.7",
-    "chalk": "^5.6.2",
-    "commander": "^14.0.1",
-    "dotenv": "^17.2.3",
-    "isomorphic-fetch": "^3.0.0",
-    "open": "^9.1.0",
-    "ora": "^9.0.0"
-  },
-  "devDependencies": {
-    "@types/commander": "^2.12.0",
-    "@types/node": "^24.9.1",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
-  }
+  "name": "clidiy-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ]
 }
