@@ -1,10 +1,8 @@
-import readline from "node:readline";
 import chalk from "chalk";
-import { input, confirm } from "@inquirer/prompts";
+import { input, confirm, select } from "@inquirer/prompts";
 import {
   displayLogo,
   displayTips,
-  displayStatusBar,
   displayError,
   displaySuccess,
   displayHelp,
@@ -12,7 +10,6 @@ import {
   showThinking,
   formatResponse,
   brand,
-  BRAND_COLOR,
 } from "./ui.js";
 import {
   getDefaultModel,
@@ -26,109 +23,8 @@ import { getModel, getProviders, hasConfiguredModel, clearModelCache } from "../
 // Import to register Gemini
 import "../models/gemini.js";
 
-type Choice<T> = { name: string; value: T };
-
-type MainMenuAction =
-  | "ask"
-  | "settings"
-  | "help"
-  | "exit";
-
-type SettingsAction =
-  | "set-api-key"
-  | "choose-model"
-  | "clear-credentials"
-  | "view-status"
-  | "back";
-
-/**
- * Vim-style select menu with keyboard navigation.
- */
-async function selectVim<T>(opts: {
-  message: string;
-  choices: Choice<T>[];
-}): Promise<T> {
-  const { message, choices } = opts;
-  if (choices.length === 0) {
-    throw new Error("No choices available.");
-  }
-
-  let index = 0;
-  let ggAt: number | null = null;
-  const totalLines = () => 1 + choices.length;
-  const hide = "\x1B[?25l";
-  const show = "\x1B[?25h";
-  const moveToTop = () => `\x1B[${Math.max(0, totalLines() - 1)}A\x1B[0G`;
-  
-  const render = () => {
-    const out: string[] = [];
-    out.push(`${chalk.bold(message)}\n`);
-    for (let i = 0; i < choices.length; i++) {
-      const pointer = i === index ? brand("❯") : " ";
-      const choice = choices[i]!;
-      const label = i === index ? brand(choice.name) : choice.name;
-      out.push(`${pointer} ${label}`);
-      if (i < choices.length - 1) out.push("\n");
-    }
-    return out.join("");
-  };
-
-  readline.emitKeypressEvents(process.stdin);
-  if (process.stdin.isTTY) process.stdin.setRawMode(true);
-  process.stdout.write(hide + render());
-
-  return await new Promise<T>((resolve, reject) => {
-    function cleanup() {
-      process.stdout.write("\n" + show);
-      if (process.stdin.isTTY) process.stdin.setRawMode(false);
-      process.stdin.removeListener("keypress", onKey);
-    }
-
-    function onKey(str: string, key: readline.Key) {
-      if (key?.name === "return") {
-        process.stdout.write(moveToTop() + "\x1B[0J");
-        cleanup();
-        resolve(choices[index]!.value);
-        return;
-      }
-      if (key?.name === "escape" || str === "q") {
-        process.stdout.write(moveToTop() + "\x1B[0J");
-        cleanup();
-        reject(new Error("Cancelled"));
-        return;
-      }
-      if (key?.ctrl && key?.name === "c") {
-        cleanup();
-        process.exit(0);
-      }
-      
-      const prev = index;
-      if (key?.name === "down" || str === "j") {
-        index = Math.min(index + 1, choices.length - 1);
-      }
-      if (key?.name === "up" || str === "k") {
-        index = Math.max(index - 1, 0);
-      }
-      if (str === "G") {
-        index = choices.length - 1;
-      }
-      if (str === "g") {
-        const now = Date.now();
-        if (ggAt && now - ggAt < 500) {
-          index = 0;
-          ggAt = null;
-        } else {
-          ggAt = now;
-        }
-      }
-      if (prev !== index) {
-        process.stdout.write(moveToTop() + "\x1B[0J" + render());
-      }
-    }
-
-    process.stdin.on("keypress", onKey);
-  });
-}
+type MainMenuAction = "ask" | "settings" | "help" | "exit";
+type SettingsAction = "set-api-key" | "choose-model" | "clear-credentials" | "view-status" | "back";
 
 /**
  * Run the main interactive menu.
@@ -141,15 +37,15 @@ export async function runInteractiveMenu(): Promise<void> {
   while (!exit) {
     const hasModel = hasConfiguredModel();
     
-    const choices: Choice<MainMenuAction>[] = [
-      ...(hasModel ? [{ name: "Ask a question", value: "ask" as const }] : []),
-      { name: "Settings", value: "settings" as const },
-      { name: "Help", value: "help" as const },
-      { name: "Exit", value: "exit" as const },
+    const choices = [
+      ...(hasModel ? [{ name: "Ask a question", value: "ask" as MainMenuAction }] : []),
+      { name: "Settings", value: "settings" as MainMenuAction },
+      { name: "Help", value: "help" as MainMenuAction },
+      { name: "Exit", value: "exit" as MainMenuAction },
     ];
 
     try {
-      const action = await selectVim<MainMenuAction>({
+      const action = await select({
         message: hasModel ? "What would you like to do?" : "Configure a model to get started:",
         choices,
       });
@@ -168,12 +64,9 @@ export async function runInteractiveMenu(): Promise<void> {
           exit = true;
           break;
       }
-    } catch (error) {
-      if (error instanceof Error && error.message === "Cancelled") {
-        exit = true;
-      } else {
-        throw error;
-      }
+    } catch {
+      // User pressed Ctrl+C or escaped
+      exit = true;
     }
   }
 
@@ -185,9 +78,15 @@ export async function runInteractiveMenu(): Promise<void> {
  * Handle the "Ask a question" flow.
  */
 async function handleAskQuestion(): Promise<void> {
-  const question = await input({
-    message: "Your question:",
-  });
+  let question: string;
+  try {
+    question = await input({
+      message: "Your question:",
+    });
+  } catch {
+    // User cancelled
+    return;
+  }
 
   if (!question.trim()) {
     displayError("Please enter a question.");
@@ -217,7 +116,6 @@ async function handleAskQuestion(): Promise<void> {
   
   try {
     // Use streaming for better UX
-    let response = "";
     spinner.stop();
     console.log();
     
@@ -226,7 +124,6 @@ async function handleAskQuestion(): Promise<void> {
     for await (const chunk of model.streamQuery(question)) {
       if (!chunk.done) {
         process.stdout.write(formatResponse(chunk.text));
-        response += chunk.text;
       }
     }
     
@@ -236,6 +133,13 @@ async function handleAskQuestion(): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     displayError(`Failed to get response: ${message}`);
   }
+  
+  // Reset stdin state after streaming - this helps inquirer work properly
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(false);
+  }
+  process.stdin.pause();
+  process.stdin.resume();
 }
 
 /**
@@ -277,45 +181,44 @@ async function handleSettings(): Promise<void> {
   while (!back) {
     const hasApiKey = isGeminiConfigured();
     
-    const choices: Choice<SettingsAction>[] = [
-      { name: "Set Gemini API Key", value: "set-api-key" },
-      { name: "Choose default model", value: "choose-model" },
+    const choices = [
+      { name: "Set Gemini API Key", value: "set-api-key" as SettingsAction },
+      { name: "Choose default model", value: "choose-model" as SettingsAction },
       ...(hasApiKey
-        ? [{ name: "Clear all credentials", value: "clear-credentials" as const }]
+        ? [{ name: "Clear all credentials", value: "clear-credentials" as SettingsAction }]
         : []),
-      { name: "View configuration status", value: "view-status" },
-      { name: "← Back", value: "back" },
+      { name: "View configuration status", value: "view-status" as SettingsAction },
+      { name: "← Back", value: "back" as SettingsAction },
     ];
 
+    let action: SettingsAction;
     try {
-      const action = await selectVim<SettingsAction>({
+      action = await select({
         message: "Settings",
         choices,
       });
+    } catch {
+      // User cancelled
+      back = true;
+      continue;
+    }
 
-      switch (action) {
-        case "set-api-key":
-          await handleSetApiKey();
-          break;
-        case "choose-model":
-          await handleChooseModel();
-          break;
-        case "clear-credentials":
-          await handleClearCredentials();
-          break;
-        case "view-status":
-          displayConfigStatus();
-          break;
-        case "back":
-          back = true;
-          break;
-      }
-    } catch (error) {
-      if (error instanceof Error && error.message === "Cancelled") {
+    switch (action) {
+      case "set-api-key":
+        await handleSetApiKey();
+        break;
+      case "choose-model":
+        await handleChooseModel();
+        break;
+      case "clear-credentials":
+        await handleClearCredentials();
+        break;
+      case "view-status":
+        displayConfigStatus();
+        break;
+      case "back":
         back = true;
-      } else {
-        throw error;
-      }
+        break;
     }
   }
 }
@@ -333,20 +236,24 @@ async function handleSetApiKey(): Promise<void> {
     console.log(chalk.gray(`\nCurrent API key: ${maskedKey}`));
   }
 
-  const apiKey = await input({
-    message: "Enter your Gemini API key:",
-    validate: (value) => {
-      if (!value.trim()) {
-        return "API key cannot be empty";
-      }
-      return true;
-    },
-  });
+  try {
+    const apiKey = await input({
+      message: "Enter your Gemini API key:",
+      validate: (value) => {
+        if (!value.trim()) {
+          return "API key cannot be empty";
+        }
+        return true;
+      },
+    });
 
-  setGeminiApiKey(apiKey.trim());
-  clearModelCache();
-  displaySuccess("API key saved successfully!");
-  console.log(chalk.gray("Get your API key at: https://aistudio.google.com/apikey\n"));
+    setGeminiApiKey(apiKey.trim());
+    clearModelCache();
+    displaySuccess("API key saved successfully!");
+    console.log(chalk.gray("Get your API key at: https://aistudio.google.com/apikey\n"));
+  } catch {
+    // User cancelled, just return to menu
+  }
 }
 
 /**
@@ -362,7 +269,7 @@ async function handleChooseModel(): Promise<void> {
 
   const currentDefault = getDefaultModel();
   
-  const choices: Choice<string>[] = providers.map((p) => ({
+  const choices = providers.map((p) => ({
     name: p.id === currentDefault
       ? `${p.name} ${chalk.gray("(current default)")}`
       : p.name,
@@ -370,17 +277,15 @@ async function handleChooseModel(): Promise<void> {
   }));
 
   try {
-    const selected = await selectVim({
+    const selected = await select({
       message: "Select default model:",
       choices,
     });
 
     setDefaultModel(selected);
     displaySuccess(`Default model set to: ${selected}`);
-  } catch (error) {
-    if (!(error instanceof Error && error.message === "Cancelled")) {
-      throw error;
-    }
+  } catch {
+    // User cancelled
   }
 }
 
@@ -388,15 +293,19 @@ async function handleChooseModel(): Promise<void> {
  * Handle clearing all credentials.
  */
 async function handleClearCredentials(): Promise<void> {
-  const confirmed = await confirm({
-    message: "This will remove all API keys. Continue?",
-    default: false,
-  });
+  try {
+    const confirmed = await confirm({
+      message: "This will remove all API keys. Continue?",
+      default: false,
+    });
 
-  if (confirmed) {
-    clearGeminiCredentials();
-    clearModelCache();
-    displaySuccess("All credentials cleared.");
+    if (confirmed) {
+      clearGeminiCredentials();
+      clearModelCache();
+      displaySuccess("All credentials cleared.");
+    }
+  } catch {
+    // User cancelled
   }
 }
 
@@ -414,7 +323,7 @@ export async function handleDirectQuestion(question: string): Promise<void> {
 
   if (!model.isConfigured()) {
     displayError(`Model "${modelId}" is not configured.`);
-    console.log(chalk.gray("Run \"smask\" to set up your API key or login.\n"));
+    console.log(chalk.gray("Run \"smask\" to set up your API key.\n"));
     process.exit(1);
   }
 
@@ -438,7 +347,3 @@ export async function handleDirectQuestion(question: string): Promise<void> {
     process.exit(1);
   }
 }
-
-
-
-
