@@ -1,7 +1,6 @@
 import chalk from "chalk";
 import ora, { type Ora } from "ora";
 import { getDefaultModel, isGeminiConfigured } from "../config/config.js";
-import { isLoggedIn } from "../auth/google.js";
 import { getModel, hasConfiguredModel } from "../models/registry.js";
 
 // Smartteknik brand color
@@ -109,8 +108,6 @@ export function displayStatusBar(): void {
     // Auth status
     if (isGeminiConfigured()) {
       parts.push(chalk.green("api key set"));
-    } else if (isLoggedIn()) {
-      parts.push(chalk.green("logged in"));
     } else {
       parts.push(chalk.yellow("no api key") + chalk.gray(" (see /docs)"));
     }
@@ -187,8 +184,6 @@ export function displayHelp(): void {
   console.log("  " + brand("smask") + "                    Open interactive menu");
   console.log("  " + brand("smask <question>") + "         Ask a question directly");
   console.log("  " + brand("smask config") + "             Manage configuration");
-  console.log("  " + brand("smask login") + "              Login with Google OAuth");
-  console.log("  " + brand("smask logout") + "             Logout and clear tokens");
   console.log();
   console.log(chalk.bold("Interactive Commands:"));
   console.log("  " + brand("/help") + "                    Show help");
@@ -213,14 +208,12 @@ export function displayConfigStatus(): void {
   
   // Gemini status
   const geminiKey = isGeminiConfigured();
-  const googleAuth = isLoggedIn();
   
   if (geminiKey) {
     console.log(chalk.green("  ✓ ") + "Gemini: " + chalk.green("API key configured"));
-  } else if (googleAuth) {
-    console.log(chalk.green("  ✓ ") + "Gemini: " + chalk.green("Logged in with Google"));
   } else {
     console.log(chalk.yellow("  ○ ") + "Gemini: " + chalk.yellow("Not configured"));
+    console.log(chalk.gray("      Get your free API key at: https://aistudio.google.com/apikey"));
   }
   
   // Default model

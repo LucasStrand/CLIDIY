@@ -10,7 +10,6 @@ import {
   getGeminiApiKey,
   clearGeminiCredentials,
 } from "./config/config.js";
-import { login, logout, isLoggedIn } from "./auth/google.js";
 // Import to register Gemini model
 import "./models/gemini.js";
 
@@ -89,47 +88,6 @@ program
     displayConfigStatus();
   });
 
-// Login command
-program
-  .command("login")
-  .description("Login with Google OAuth")
-  .action(async () => {
-    try {
-      if (isLoggedIn()) {
-        console.log(chalk.yellow("Already logged in."));
-        const { confirm } = await import("@inquirer/prompts");
-        const relogin = await confirm({
-          message: "Do you want to login again?",
-          default: false,
-        });
-        if (!relogin) {
-          return;
-        }
-      }
-
-      await login();
-      displaySuccess("Successfully logged in with Google!");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      displayError(`Login failed: ${message}`);
-      process.exit(1);
-    }
-  });
-
-// Logout command
-program
-  .command("logout")
-  .description("Logout and clear tokens")
-  .action(() => {
-    if (!isLoggedIn()) {
-      console.log(chalk.gray("Not logged in."));
-      return;
-    }
-
-    logout();
-    displaySuccess("Successfully logged out.");
-  });
-
 // Clear command
 program
   .command("clear")
@@ -137,13 +95,12 @@ program
   .action(async () => {
     const { confirm } = await import("@inquirer/prompts");
     const confirmed = await confirm({
-      message: "This will remove all API keys and tokens. Continue?",
+      message: "This will remove all API keys. Continue?",
       default: false,
     });
 
     if (confirmed) {
       clearGeminiCredentials();
-      logout();
       displaySuccess("All credentials cleared.");
     }
   });
@@ -184,7 +141,7 @@ async function main() {
 
   // Check if first arg is a command
   const firstArg = args[0];
-  const commands = ["config", "login", "logout", "clear", "help", "ask"];
+  const commands = ["config", "clear", "help", "ask"];
   
   if (firstArg && !commands.includes(firstArg) && !firstArg.startsWith("-")) {
     // Treat as a direct question

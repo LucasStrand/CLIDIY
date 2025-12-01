@@ -22,7 +22,6 @@ import {
   isGeminiConfigured,
   clearGeminiCredentials,
 } from "../config/config.js";
-import { login, logout, isLoggedIn } from "../auth/google.js";
 import { getModel, getProviders, hasConfiguredModel, clearModelCache } from "../models/registry.js";
 // Import to register Gemini
 import "../models/gemini.js";
@@ -37,8 +36,6 @@ type MainMenuAction =
 
 type SettingsAction =
   | "set-api-key"
-  | "login"
-  | "logout"
   | "choose-model"
   | "clear-credentials"
   | "view-status"
@@ -278,16 +275,12 @@ async function handleSettings(): Promise<void> {
   let back = false;
   
   while (!back) {
-    const isAuthenticated = isLoggedIn();
     const hasApiKey = isGeminiConfigured();
     
     const choices: Choice<SettingsAction>[] = [
       { name: "Set Gemini API Key", value: "set-api-key" },
-      ...(isAuthenticated
-        ? [{ name: "Logout from Google", value: "logout" as const }]
-        : [{ name: "Login with Google", value: "login" as const }]),
       { name: "Choose default model", value: "choose-model" },
-      ...(hasApiKey || isAuthenticated
+      ...(hasApiKey
         ? [{ name: "Clear all credentials", value: "clear-credentials" as const }]
         : []),
       { name: "View configuration status", value: "view-status" },
@@ -303,12 +296,6 @@ async function handleSettings(): Promise<void> {
       switch (action) {
         case "set-api-key":
           await handleSetApiKey();
-          break;
-        case "login":
-          await handleLogin();
-          break;
-        case "logout":
-          await handleLogout();
           break;
         case "choose-model":
           await handleChooseModel();
@@ -363,37 +350,6 @@ async function handleSetApiKey(): Promise<void> {
 }
 
 /**
- * Handle Google OAuth login.
- */
-async function handleLogin(): Promise<void> {
-  try {
-    console.log(chalk.gray("\nStarting Google OAuth login..."));
-    await login();
-    clearModelCache();
-    displaySuccess("Successfully logged in with Google!");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    displayError(`Login failed: ${message}`);
-  }
-}
-
-/**
- * Handle logout.
- */
-async function handleLogout(): Promise<void> {
-  const confirmed = await confirm({
-    message: "Are you sure you want to logout?",
-    default: false,
-  });
-
-  if (confirmed) {
-    logout();
-    clearModelCache();
-    displaySuccess("Successfully logged out.");
-  }
-}
-
-/**
  * Handle choosing the default model.
  */
 async function handleChooseModel(): Promise<void> {
@@ -433,13 +389,12 @@ async function handleChooseModel(): Promise<void> {
  */
 async function handleClearCredentials(): Promise<void> {
   const confirmed = await confirm({
-    message: "This will remove all API keys and tokens. Continue?",
+    message: "This will remove all API keys. Continue?",
     default: false,
   });
 
   if (confirmed) {
     clearGeminiCredentials();
-    logout();
     clearModelCache();
     displaySuccess("All credentials cleared.");
   }
