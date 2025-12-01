@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "module": "nodenext",
+    "target": "es2020",
+    "lib": ["es2020"],
+    "types": ["node"],
+    "sourceMap": true,
+    "declaration": false,
+    "declarationMap": false,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "strict": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noUncheckedSideEffectImports": true,
+    "moduleDetection": "force",
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "moduleResolution": "nodenext",
+    "newLine": "lf"
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+
+
+
+
