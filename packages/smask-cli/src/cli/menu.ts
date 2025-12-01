@@ -1,5 +1,6 @@
 import chalk from "chalk";
-import { input, confirm, select } from "@inquirer/prompts";
+import readline from "node:readline";
+import { input, confirm } from "@inquirer/prompts";
 import {
   displayLogo,
   displayTips,
@@ -26,6 +27,122 @@ import "../models/gemini.js";
 type MainMenuAction = "ask" | "settings" | "help" | "exit";
 type SettingsAction = "set-api-key" | "choose-model" | "clear-credentials" | "view-status" | "back";
 
+interface Choice<T> {
+  name: string;
+  value: T;
+}
+
+/**
+ * Custom select with vim keybindings (j/k, gg, G, q/Esc).
+ */
+async function selectVim<T>(opts: {
+  message: string;
+  choices: Choice<T>[];
+}): Promise<T> {
+  const { message, choices } = opts;
+  if (choices.length === 0) {
+    throw new Error("No choices available.");
+  }
+
+  let index = 0;
+  let ggAt: number | null = null;
+  const totalLines = () => 1 + choices.length;
+  const hide = "\x1B[?25l"; // Hide cursor
+  const show = "\x1B[?25h"; // Show cursor
+  const moveToTop = () => `\x1B[${Math.max(0, totalLines() - 1)}A\x1B[0G`;
+  
+  const render = () => {
+    const out: string[] = [];
+    out.push(`${chalk.bold(message)}\n`);
+    for (let i = 0; i < choices.length; i++) {
+      const pointer = i === index ? brand("❯") : " ";
+      const choice = choices[i]!;
+      const label = i === index ? brand(choice.name) : choice.name;
+      out.push(`${pointer} ${label}`);
+      if (i < choices.length - 1) out.push("\n");
+    }
+    return out.join("");
+  };
+
+  return new Promise<T>((resolve, reject) => {
+    // Set up fresh stdin state
+    process.stdin.removeAllListeners("keypress");
+    readline.emitKeypressEvents(process.stdin);
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+    }
+    process.stdin.resume();
+    
+    process.stdout.write(hide + render());
+
+    const cleanup = () => {
+      process.stdout.write(show);
+      process.stdin.removeListener("keypress", onKey);
+      if (process.stdin.isTTY) {
+        process.stdin.setRawMode(false);
+      }
+    };
+
+    const onKey = (str: string | undefined, key: readline.Key | undefined) => {
+      // Handle Ctrl+C
+      if (key?.ctrl && key?.name === "c") {
+        cleanup();
+        process.stdout.write("\n");
+        process.exit(0);
+      }
+      
+      // Handle Enter - select current item
+      if (key?.name === "return") {
+        process.stdout.write(moveToTop() + "\x1B[0J");
+        cleanup();
+        resolve(choices[index]!.value);
+        return;
+      }
+      
+      // Handle Escape or q - cancel
+      if (key?.name === "escape" || str === "q") {
+        process.stdout.write(moveToTop() + "\x1B[0J");
+        cleanup();
+        reject(new Error("Cancelled"));
+        return;
+      }
+      
+      const prev = index;
+      
+      // Vim navigation: j = down, k = up
+      if (key?.name === "down" || str === "j") {
+        index = Math.min(index + 1, choices.length - 1);
+      }
+      if (key?.name === "up" || str === "k") {
+        index = Math.max(index - 1, 0);
+      }
+      
+      // G = go to end
+      if (str === "G") {
+        index = choices.length - 1;
+      }
+      
+      // gg = go to start (double tap g within 500ms)
+      if (str === "g") {
+        const now = Date.now();
+        if (ggAt && now - ggAt < 500) {
+          index = 0;
+          ggAt = null;
+        } else {
+          ggAt = now;
+        }
+      }
+      
+      // Re-render if selection changed
+      if (prev !== index) {
+        process.stdout.write(moveToTop() + "\x1B[0J" + render());
+      }
+    };
+
+    process.stdin.on("keypress", onKey);
+  });
+}
+
 /**
  * Run the main interactive menu.
  */
@@ -37,15 +154,15 @@ export async function runInteractiveMenu(): Promise<void> {
   while (!exit) {
     const hasModel = hasConfiguredModel();
     
-    const choices = [
+    const choices: Choice<MainMenuAction>[] = [
       ...(hasModel ? [{ name: "Ask a question", value: "ask" as MainMenuAction }] : []),
-      { name: "Settings", value: "settings" as MainMenuAction },
-      { name: "Help", value: "help" as MainMenuAction },
-      { name: "Exit", value: "exit" as MainMenuAction },
+      { name: "Settings", value: "settings" },
+      { name: "Help", value: "help" },
+      { name: "Exit", value: "exit" },
     ];
 
     try {
-      const action = await select({
+      const action = await selectVim({
         message: hasModel ? "What would you like to do?" : "Configure a model to get started:",
         choices,
       });
@@ -134,12 +251,6 @@ async function handleAskQuestion(): Promise<void> {
     displayError(`Failed to get response: ${message}`);
   }
   
-  // Reset stdin state after streaming - this helps inquirer work properly
-  if (process.stdin.isTTY) {
-    process.stdin.setRawMode(false);
-  }
-  process.stdin.pause();
-  process.stdin.resume();
 }
 
 /**
@@ -181,19 +292,19 @@ async function handleSettings(): Promise<void> {
   while (!back) {
     const hasApiKey = isGeminiConfigured();
     
-    const choices = [
-      { name: "Set Gemini API Key", value: "set-api-key" as SettingsAction },
-      { name: "Choose default model", value: "choose-model" as SettingsAction },
+    const choices: Choice<SettingsAction>[] = [
+      { name: "Set Gemini API Key", value: "set-api-key" },
+      { name: "Choose default model", value: "choose-model" },
       ...(hasApiKey
         ? [{ name: "Clear all credentials", value: "clear-credentials" as SettingsAction }]
         : []),
-      { name: "View configuration status", value: "view-status" as SettingsAction },
-      { name: "← Back", value: "back" as SettingsAction },
+      { name: "View configuration status", value: "view-status" },
+      { name: "← Back", value: "back" },
     ];
 
     let action: SettingsAction;
     try {
-      action = await select({
+      action = await selectVim({
         message: "Settings",
         choices,
       });
@@ -252,7 +363,7 @@ async function handleSetApiKey(): Promise<void> {
     displaySuccess("API key saved successfully!");
     console.log(chalk.gray("Get your API key at: https://aistudio.google.com/apikey\n"));
   } catch {
-    // User cancelled, just return to menu
+    // User cancelled
   }
 }
 
@@ -269,7 +380,7 @@ async function handleChooseModel(): Promise<void> {
 
   const currentDefault = getDefaultModel();
   
-  const choices = providers.map((p) => ({
+  const choices: Choice<string>[] = providers.map((p) => ({
     name: p.id === currentDefault
       ? `${p.name} ${chalk.gray("(current default)")}`
       : p.name,
@@ -277,7 +388,7 @@ async function handleChooseModel(): Promise<void> {
   }));
 
   try {
-    const selected = await select({
+    const selected = await selectVim({
       message: "Select default model:",
       choices,
     });
