@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import readline from "node:readline";
 import { input, confirm } from "@inquirer/prompts";
+import type { ChatMessage } from "./ui.js";
 import {
   displayHomePreview,
   displayError,
@@ -13,6 +14,11 @@ import {
   buildHomeScreenLayout,
   buildPromptBoxLines,
   renderPromptBoxBlock,
+  renderUserMessage,
+  renderAssistantMessage,
+  buildStatusLine,
+  renderLogoBlock,
+  renderTipsBlock,
 } from "./ui.js";
 import {
   getDefaultModel,
@@ -212,6 +218,60 @@ function renderMenuBlock(choices: Choice<MainMenuAction>[], hasModel: boolean): 
 let hasShownHomeScreen = false;
 let hasActivePromptBox = false;
 
+// Chat conversation history
+let chatHistory: ChatMessage[] = [];
+
+/**
+ * Render the full screen with chat history and input box.
+ */
+function renderChatScreen(
+  messages: ChatMessage[],
+  inputText: string,
+  hasModel: boolean,
+  choices: Choice<MainMenuAction>[]
+): void {
+  // Clear screen completely and reset cursor
+  process.stdout.write("\x1B[2J"); // Clear entire screen
+  process.stdout.write("\x1B[H");   // Move cursor to top-left (row 1, column 1)
+  process.stdout.write("\x1B[3J"); // Clear scrollback buffer (optional, helps with some terminals)
+  
+  // Build the entire screen content as a single string to avoid partial writes
+  const sections: string[] = [];
+  
+  // Always show logo and tips at the top
+  sections.push(renderLogoBlock());
+  sections.push(renderTipsBlock());
+  
+  if (messages.length > 0) {
+    // Show chat messages below tips
+    sections.push("");
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i]!;
+      if (msg.role === "user") {
+        sections.push(renderUserMessage(msg.content));
+      } else {
+        sections.push(renderAssistantMessage(msg.content));
+      }
+      if (i < messages.length - 1) {
+        sections.push("");
+      }
+    }
+    sections.push("");
+  }
+  
+  // Input box (always at bottom)
+  const promptLines = buildPromptBoxLines(inputText.length > 0 ? inputText : undefined);
+  sections.push(...promptLines);
+  
+  // Status bar
+  sections.push("");
+  sections.push(buildStatusLine());
+  sections.push(chalk.gray("  Esc: menu • /clear: new chat • /help: commands"));
+  
+  // Write everything at once
+  process.stdout.write(sections.join("\n"));
+}
+
 async function captureChatInput(
   hasModel: boolean,
   choices: Choice<MainMenuAction>[]
@@ -221,6 +281,7 @@ async function captureChatInput(
 
   let text = "";
   let cursorHidden = false;
+  let isInitialRender = true;
 
   const render = () => {
     if (!cursorHidden) {
@@ -228,14 +289,15 @@ async function captureChatInput(
       cursorHidden = true;
     }
     
-    // Always re-render the full home screen to avoid cursor positioning issues
-    console.clear();
-    const menuBlock = renderMenuBlock(choices, hasModel);
-    process.stdout.write(
-      buildHomeScreenLayout(menuBlock, hasModel, text.length > 0 ? text : "")
-    );
-    hasShownHomeScreen = true;
-    hasActivePromptBox = true;
+    // Always do a full re-render to avoid cursor position issues
+    // This is more reliable than trying to update in place
+    renderChatScreen(chatHistory, text, hasModel, choices);
+    
+    if (isInitialRender) {
+      isInitialRender = false;
+      hasShownHomeScreen = true;
+      hasActivePromptBox = true;
+    }
   };
 
   return new Promise<string | undefined>((resolve) => {
@@ -327,6 +389,11 @@ async function captureChatInput(
  */
 export async function runInteractiveMenu(): Promise<void> {
   let exit = false;
+  // Reset chat history on start
+  chatHistory = [];
+  hasShownHomeScreen = false;
+  hasActivePromptBox = false;
+  
   while (!exit) {
     const hasModel = hasConfiguredModel();
 
@@ -374,9 +441,6 @@ export async function runInteractiveMenu(): Promise<void> {
         } else {
           // User submitted a question
           await processQuestion(question, choices);
-          // Reset home screen state so it renders fresh after showing answer
-          hasShownHomeScreen = false;
-          hasActivePromptBox = false;
         }
       } else {
         // No model configured - show menu
@@ -415,6 +479,61 @@ export async function runInteractiveMenu(): Promise<void> {
 }
 
 /**
+ * Append a user message above the input box.
+ */
+function appendUserMessage(content: string, hasModel: boolean, choices: Choice<MainMenuAction>[]): void {
+  // Calculate how many lines the input area takes (prompt box + status bar + hint)
+  const inputAreaLines = 3 + 1 + 1; // prompt box (3 lines) + status bar (1) + hint (1)
+  
+  // Move cursor up to clear input area
+  process.stdout.write(`\x1B[${inputAreaLines}A`);
+  process.stdout.write("\x1B[0J"); // Clear from cursor to end
+  
+  // Render user message
+  const userMsg = renderUserMessage(content);
+  process.stdout.write(userMsg);
+  process.stdout.write("\n\n");
+  
+  // Re-render input box and status bar below
+  const inputBox = buildPromptBoxLines();
+  inputBox.forEach((line) => {
+    process.stdout.write(line + "\n");
+  });
+  process.stdout.write("\n");
+  process.stdout.write(buildStatusLine() + "\n");
+  process.stdout.write(chalk.gray("  Esc: menu • /clear: new chat • /help: commands"));
+  
+  // Note: After appending messages, the next input render should be a full render
+  // This will be handled by the captureChatInput function resetting isInitialRender
+}
+
+/**
+ * Append an assistant message above the input box.
+ */
+function appendAssistantMessage(content: string, hasModel: boolean, choices: Choice<MainMenuAction>[]): void {
+  // Calculate how many lines the input area takes
+  const inputAreaLines = 3 + 1 + 1; // prompt box + status bar + hint
+  
+  // Move cursor up to clear input area
+  process.stdout.write(`\x1B[${inputAreaLines}A`);
+  process.stdout.write("\x1B[0J"); // Clear from cursor to end
+  
+  // Render assistant message
+  const assistantMsg = renderAssistantMessage(content);
+  process.stdout.write(assistantMsg);
+  process.stdout.write("\n\n");
+  
+  // Re-render input box and status bar below
+  const inputBox = buildPromptBoxLines();
+  inputBox.forEach((line) => {
+    process.stdout.write(line + "\n");
+  });
+  process.stdout.write("\n");
+  process.stdout.write(buildStatusLine() + "\n");
+  process.stdout.write(chalk.gray("  Esc: menu • /clear: new chat • /help: commands"));
+}
+
+/**
  * Process a submitted question.
  */
 async function processQuestion(question: string, choices: Choice<MainMenuAction>[]): Promise<void> {
@@ -427,8 +546,6 @@ async function processQuestion(question: string, choices: Choice<MainMenuAction>
 
   // Handle special commands
   if (normalizedQuestion.startsWith("/")) {
-    // Let the command control what is shown on screen.
-    // We don't redraw the home layout here so answers and help text remain visible.
     await handleCommand(normalizedQuestion);
     return;
   }
@@ -446,31 +563,93 @@ async function processQuestion(question: string, choices: Choice<MainMenuAction>
     return;
   }
 
-  const spinner = showThinking("Thinking...");
+  // Add user message to history
+  chatHistory.push({
+    role: "user",
+    content: normalizedQuestion,
+    timestamp: new Date(),
+  });
+
+  // Append user message above input box (don't clear screen)
+  const hasModel = hasConfiguredModel();
+  appendUserMessage(normalizedQuestion, hasModel, choices);
+
+  // Show streaming response above input box
+  process.stdout.write("\n");
+  process.stdout.write(brand.bold("✦ SMASK"));
+  process.stdout.write("\n");
+  const terminalWidth = process.stdout.columns || 80;
+  const maxBubbleWidth = Math.min(Math.floor(terminalWidth * 0.85), 80);
+  const horizontal = maxBubbleWidth - 2;
+  const assistantColor = "#feba17"; // BRAND_COLOR
+  const assistantBg = "#1a1400";
+  process.stdout.write(chalk.hex(assistantColor)(`╭${"─".repeat(horizontal)}╮\n`));
+  process.stdout.write(chalk.hex(assistantColor)("│") + chalk.bgHex(assistantBg).hex("#fff4d6")(" "));
+  
+  let fullResponse = "";
   
   try {
-    // Use streaming for better UX
-    spinner.stop();
-    console.log();
+    // Build prompt with conversation context
+    const previousMessages = chatHistory.slice(0, -1);
+    let prompt = normalizedQuestion;
+    if (previousMessages.length > 0) {
+      // Include context from previous messages
+      const contextParts: string[] = [];
+      contextParts.push("Previous conversation:");
+      for (const msg of previousMessages) {
+        const role = msg.role === "user" ? "User" : "Assistant";
+        contextParts.push(`${role}: ${msg.content}`);
+      }
+      contextParts.push("");
+      contextParts.push("Current question:");
+      contextParts.push(`User: ${normalizedQuestion}`);
+      prompt = contextParts.join("\n");
+    }
     
-    process.stdout.write(brand("✦ "));
-    
-    for await (const chunk of model.streamQuery(normalizedQuestion)) {
+    for await (const chunk of model.streamQuery(prompt)) {
       if (!chunk.done) {
-        process.stdout.write(formatResponse(chunk.text));
+        process.stdout.write(chalk.bgHex(assistantBg).hex("#fff4d6")(chunk.text));
+        fullResponse += chunk.text;
       }
     }
     
-    console.log("\n");
-    // Wait for user to press Enter before returning to input
-    console.log(chalk.gray("Press Enter to continue..."));
-    await waitForEnter();
+    // Close the streaming bubble
+    process.stdout.write("\n");
+    process.stdout.write(chalk.hex(assistantColor)(`╰${"─".repeat(horizontal)}╯\n`));
+    
+    // Add assistant response to history
+    chatHistory.push({
+      role: "assistant",
+      content: fullResponse,
+      timestamp: new Date(),
+    });
+    
+    // Replace the streaming display with the final formatted message
+    // Calculate approximate lines for the streaming display
+    const streamingContentLines = Math.ceil(fullResponse.length / (maxBubbleWidth - 4)) || 1;
+    const streamingLines = 1 + 1 + streamingContentLines + 1; // label + top + content + bottom
+    process.stdout.write(`\x1B[${streamingLines}A`);
+    process.stdout.write("\x1B[0J");
+    appendAssistantMessage(fullResponse, hasModel, choices);
   } catch (error) {
-    spinner.stop();
+    // Close the streaming bubble on error
+    process.stdout.write("\n");
+    process.stdout.write(chalk.hex(assistantColor)(`╰${"─".repeat(horizontal)}╯\n`));
+    
     const message = error instanceof Error ? error.message : String(error);
     displayError(`Failed to get response: ${message}`);
-    console.log(chalk.gray("Press Enter to continue..."));
-    await waitForEnter();
+    
+    // Remove the user message if we failed
+    chatHistory.pop();
+    
+    // Re-render input box
+    const inputBox = buildPromptBoxLines();
+    inputBox.forEach((line) => {
+      process.stdout.write(line + "\n");
+    });
+    process.stdout.write("\n");
+    process.stdout.write(buildStatusLine() + "\n");
+    process.stdout.write(chalk.gray("  Esc: menu • /clear: new chat • /help: commands"));
   }
 }
 
@@ -548,11 +727,14 @@ async function handleCommand(command: string): Promise<void> {
       await handleSettings();
       break;
     case "/clear":
-      hasShownHomeScreen = false; // Reset so full screen shows again
-      hasActivePromptBox = false; // Reset prompt box state
+    case "/new":
+      // Clear chat history and return to home screen
+      chatHistory = [];
+      hasShownHomeScreen = false;
+      hasActivePromptBox = false;
       displayHomePreview(hasConfiguredModel());
-      hasShownHomeScreen = true; // Mark as shown
-      hasActivePromptBox = true; // Mark prompt box as active
+      hasShownHomeScreen = true;
+      hasActivePromptBox = true;
       break;
     case "/exit":
     case "/quit":

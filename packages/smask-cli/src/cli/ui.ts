@@ -1,12 +1,25 @@
 import chalk from "chalk";
 import ora, { type Ora } from "ora";
 import { homedir } from "node:os";
-import { getDefaultModel } from "../config/config.js";
+import { getDefaultModel, isGeminiConfigured } from "../config/config.js";
 import { getModel } from "../models/registry.js";
 
 // Smartteknik brand color
 export const BRAND_COLOR = "#feba17";
 export const brand = chalk.hex(BRAND_COLOR);
+
+// Chat message types
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  timestamp?: Date;
+}
+
+// Chat colors
+const USER_COLOR = "#4a9eff";
+const ASSISTANT_COLOR = BRAND_COLOR;
+const USER_BG = "#0d1a2d";
+const ASSISTANT_BG = "#1a1400";
 
 /**
  * ASCII art logo for SMASK
@@ -85,7 +98,7 @@ function applyGradient(text: string, colorIndex: number): string {
 /**
  * Display the SMASK logo with gradient colors.
  */
-function renderLogoBlock(): string {
+export function renderLogoBlock(): string {
   const gradientLines = LOGO_LINES.map((line, index) => applyGradient(line, index));
   return ["", ...gradientLines, ""].join("\n");
 }
@@ -94,7 +107,7 @@ export function displayLogo(): void {
   console.log(renderLogoBlock());
 }
 
-function renderTipsBlock(): string {
+export function renderTipsBlock(): string {
   const lines = [
     chalk.gray("Tips for getting started:"),
     chalk.gray("1. Ask questions, explore ideas, or get help with tasks."),
@@ -179,7 +192,7 @@ export function showThinking(message: string = "Thinking..."): Ora {
 /**
  * Display the status bar at the bottom.
  */
-function buildStatusLine(): string {
+export function buildStatusLine(): string {
   const parts: string[] = [];
 
   parts.push(chalk.white(formatWorkingDirectory()));
@@ -282,23 +295,28 @@ export function buildHomeScreenLayout(
  */
 export function displayHelp(): void {
   console.log();
-  console.log(chalk.bold("SMASK - Ask LLMs from your terminal"));
+  console.log(chalk.bold("SMASK - Chat with LLMs from your terminal"));
   console.log();
   console.log(chalk.bold("Usage:"));
-  console.log("  " + brand("smask") + "                    Open interactive menu");
+  console.log("  " + brand("smask") + "                    Start interactive chat");
   console.log("  " + brand("smask <question>") + "         Ask a question directly");
   console.log("  " + brand("smask config") + "             Manage configuration");
   console.log();
-  console.log(chalk.bold("Interactive Commands:"));
-  console.log("  " + brand("/help") + "                    Show help");
+  console.log(chalk.bold("Chat Commands:"));
+  console.log("  " + brand("/help") + "                    Show this help");
   console.log("  " + brand("/settings") + "                Open settings menu");
-  console.log("  " + brand("/clear") + "                   Clear the screen");
+  console.log("  " + brand("/clear") + " or " + brand("/new") + "           Start a new conversation");
+  console.log("  " + brand("/status") + "                  Show configuration status");
   console.log("  " + brand("/exit") + "                    Exit SMASK");
   console.log();
   console.log(chalk.bold("Navigation:"));
-  console.log("  " + chalk.gray("j/k or ↑/↓") + "               Navigate menu");
-  console.log("  " + chalk.gray("Enter") + "                    Select option");
-  console.log("  " + chalk.gray("q or Esc") + "                 Go back / Exit");
+  console.log("  " + chalk.gray("Enter") + "                    Send message");
+  console.log("  " + chalk.gray("Esc") + "                      Open menu");
+  console.log("  " + chalk.gray("j/k or ↑/↓") + "               Navigate menu items");
+  console.log();
+  console.log(chalk.bold("Tips:"));
+  console.log("  • Conversations maintain context - ask follow-up questions!");
+  console.log("  • Use " + brand("/clear") + " to start fresh when changing topics");
   console.log();
 }
 
@@ -363,6 +381,190 @@ export function displayBox(text: string, title?: string): void {
     console.log(chalk.gray("│ ") + line + padding + chalk.gray(" │"));
   }
   console.log(chalk.gray(bottom));
+}
+
+/**
+ * Word wrap text to fit within a given width.
+ */
+function wordWrap(text: string, maxWidth: number): string[] {
+  const lines: string[] = [];
+  const paragraphs = text.split("\n");
+  
+  for (const paragraph of paragraphs) {
+    if (paragraph.length === 0) {
+      lines.push("");
+      continue;
+    }
+    
+    const words = paragraph.split(" ");
+    let currentLine = "";
+    
+    for (const word of words) {
+      if (currentLine.length === 0) {
+        currentLine = word;
+      } else if (currentLine.length + 1 + word.length <= maxWidth) {
+        currentLine += " " + word;
+      } else {
+        lines.push(currentLine);
+        currentLine = word;
+      }
+    }
+    
+    if (currentLine.length > 0) {
+      lines.push(currentLine);
+    }
+  }
+  
+  return lines;
+}
+
+/**
+ * Render a user message bubble.
+ */
+export function renderUserMessage(content: string): string {
+  const terminalWidth = getTerminalWidth();
+  const maxBubbleWidth = Math.min(Math.floor(terminalWidth * 0.75), 70);
+  const innerWidth = maxBubbleWidth - 4;
+  
+  const wrappedLines = wordWrap(content, innerWidth);
+  const bubbleWidth = Math.max(...wrappedLines.map(l => l.length), 10) + 4;
+  const indent = Math.max(terminalWidth - bubbleWidth - 2, 0);
+  const spacer = " ".repeat(indent);
+  
+  const lines: string[] = [];
+  const userLabel = chalk.hex(USER_COLOR).bold("You");
+  lines.push(spacer + userLabel);
+  
+  const border = chalk.hex(USER_COLOR);
+  const horizontal = bubbleWidth - 2;
+  
+  lines.push(spacer + border(`╭${"─".repeat(horizontal)}╮`));
+  
+  for (const line of wrappedLines) {
+    const padding = " ".repeat(bubbleWidth - 4 - line.length);
+    const styledContent = chalk.bgHex(USER_BG).hex("#ffffff")(` ${line}${padding} `);
+    lines.push(spacer + border("│") + styledContent + border("│"));
+  }
+  
+  lines.push(spacer + border(`╰${"─".repeat(horizontal)}╯`));
+  
+  return lines.join("\n");
+}
+
+/**
+ * Render an assistant message bubble.
+ */
+export function renderAssistantMessage(content: string): string {
+  const terminalWidth = getTerminalWidth();
+  const maxBubbleWidth = Math.min(Math.floor(terminalWidth * 0.85), 80);
+  const innerWidth = maxBubbleWidth - 4;
+  
+  const wrappedLines = wordWrap(content, innerWidth);
+  const bubbleWidth = Math.max(...wrappedLines.map(l => l.length), 10) + 4;
+  
+  const lines: string[] = [];
+  const assistantLabel = brand.bold("✦ SMASK");
+  lines.push(assistantLabel);
+  
+  const border = chalk.hex(ASSISTANT_COLOR);
+  const horizontal = bubbleWidth - 2;
+  
+  lines.push(border(`╭${"─".repeat(horizontal)}╮`));
+  
+  for (const line of wrappedLines) {
+    const padding = " ".repeat(bubbleWidth - 4 - line.length);
+    const styledContent = chalk.bgHex(ASSISTANT_BG).hex("#fff4d6")(` ${line}${padding} `);
+    lines.push(border("│") + styledContent + border("│"));
+  }
+  
+  lines.push(border(`╰${"─".repeat(horizontal)}╯`));
+  
+  return lines.join("\n");
+}
+
+/**
+ * Render the entire chat history.
+ */
+export function renderChatHistory(messages: ChatMessage[]): string {
+  if (messages.length === 0) {
+    return "";
+  }
+  
+  const renderedMessages = messages.map((msg) => {
+    if (msg.role === "user") {
+      return renderUserMessage(msg.content);
+    } else {
+      return renderAssistantMessage(msg.content);
+    }
+  });
+  
+  return renderedMessages.join("\n\n");
+}
+
+/**
+ * Build the chat screen layout with history and input.
+ */
+export function buildChatScreenLayout(
+  messages: ChatMessage[],
+  inputText?: string
+): string {
+  const sections: string[] = [];
+  
+  // Compact header
+  const header = brand("─── SMASK Chat ") + chalk.gray("─".repeat(Math.max(getTerminalWidth() - 16, 10)));
+  sections.push(header);
+  sections.push("");
+  
+  // Chat history
+  if (messages.length > 0) {
+    sections.push(renderChatHistory(messages));
+    sections.push("");
+  } else {
+    // Welcome message for empty chat
+    sections.push(chalk.gray("  Start a conversation by typing below..."));
+    sections.push("");
+  }
+  
+  // Input prompt
+  sections.push(...buildPromptBoxLines(inputText));
+  
+  // Status bar
+  sections.push("");
+  sections.push(buildStatusLine());
+  sections.push(chalk.gray("  Esc: menu • /clear: new chat • /help: commands"));
+  
+  return sections.join("\n");
+}
+
+/**
+ * Display streaming assistant response start.
+ */
+export function displayStreamingStart(): void {
+  console.log();
+  console.log(brand.bold("✦ SMASK"));
+  const terminalWidth = getTerminalWidth();
+  const maxBubbleWidth = Math.min(Math.floor(terminalWidth * 0.85), 80);
+  const horizontal = maxBubbleWidth - 2;
+  console.log(chalk.hex(ASSISTANT_COLOR)(`╭${"─".repeat(horizontal)}╮`));
+  process.stdout.write(chalk.hex(ASSISTANT_COLOR)("│") + chalk.bgHex(ASSISTANT_BG).hex("#fff4d6")(" "));
+}
+
+/**
+ * Display streaming assistant response chunk.
+ */
+export function displayStreamingChunk(chunk: string): void {
+  process.stdout.write(chalk.bgHex(ASSISTANT_BG).hex("#fff4d6")(chunk));
+}
+
+/**
+ * Display streaming assistant response end.
+ */
+export function displayStreamingEnd(): void {
+  console.log();
+  const terminalWidth = getTerminalWidth();
+  const maxBubbleWidth = Math.min(Math.floor(terminalWidth * 0.85), 80);
+  const horizontal = maxBubbleWidth - 2;
+  console.log(chalk.hex(ASSISTANT_COLOR)(`╰${"─".repeat(horizontal)}╯`));
 }
 
 
