@@ -1,6 +1,8 @@
 import chalk from "chalk";
 import ora, { type Ora } from "ora";
 import { homedir } from "node:os";
+import { marked } from "marked";
+import type { MarkedOptions } from "marked";
 import { getDefaultModel, isGeminiConfigured } from "../config/config.js";
 import { getModel } from "../models/registry.js";
 
@@ -137,9 +139,7 @@ function truncateText(value: string, maxLength: number): string {
 export function buildPromptBoxLines(content?: string): string[] {
   const placeholder = content ?? "Type your message or @path/to/file";
   const terminalWidth = getTerminalWidth();
-  const desiredWidth = Math.max(getPromptWidth(), placeholder.length + 8);
-  const unclampedWidth = Math.min(desiredWidth, terminalWidth);
-  const width = terminalWidth < 30 ? terminalWidth : Math.max(unclampedWidth, 30);
+  const width = terminalWidth < 30 ? terminalWidth : terminalWidth;
   const innerWidth = Math.max(width - 4, 2);
   const contentWidth = Math.max(innerWidth - 1, 1);
   const placeholderWidth = Math.max(contentWidth - 1, 1);
@@ -384,7 +384,194 @@ export function displayBox(text: string, title?: string): void {
 }
 
 /**
- * Word wrap text to fit within a given width.
+ * Strip ANSI codes from a string to get the actual visible length.
+ */
+function stripAnsiCodes(str: string): string {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
+}
+
+/**
+ * Get the visible length of a string (ignoring ANSI codes).
+ */
+function visibleLength(str: string): number {
+  return stripAnsiCodes(str).length;
+}
+
+/**
+ * Render markdown tokens to styled terminal text.
+ */
+function renderToken(token: any, renderer: any): string {
+  switch (token.type) {
+    case "heading": {
+      const text = renderer(token.tokens || []);
+      const level = token.depth;
+      const colors = [
+        chalk.hex("#ffcc33").bold, // h1 - bright gold
+        chalk.hex("#ff9f1c").bold, // h2 - orange gold
+        chalk.hex("#feba17").bold, // h3 - brand gold
+        chalk.hex("#f77f00"),      // h4 - deep orange
+        chalk.hex("#ff6b35"),      // h5 - coral
+        chalk.hex("#e85d04"),      // h6 - burnt orange
+      ];
+      const style = colors[Math.min(level - 1, colors.length - 1)] ?? chalk.bold;
+      return style(text) + "\n";
+    }
+    case "strong": {
+      const text = renderer(token.tokens || []);
+      // Use bright white for bold text to make it stand out
+      return chalk.whiteBright.bold(text);
+    }
+    case "em": {
+      const text = renderer(token.tokens || []);
+      return chalk.italic(text);
+    }
+    case "code": {
+      const code = token.text || "";
+      const bgColor = "#1e1e1e";
+      const textColor = "#d4d4d4";
+      const lines = code.split("\n");
+      const maxLineLength = Math.max(...lines.map((l: string) => l.length), 0);
+      const padding = 2;
+      const width = maxLineLength + padding * 2;
+      
+      const top = chalk.bgHex(bgColor).hex(textColor)(" ".repeat(width));
+      const bottom = chalk.bgHex(bgColor).hex(textColor)(" ".repeat(width));
+      
+      const codeLines = lines.map((line: string) => {
+        const padded = line.padEnd(maxLineLength, " ");
+        return chalk.bgHex(bgColor).hex(textColor)(`${" ".repeat(padding)}${padded}${" ".repeat(padding)}`);
+      });
+      
+      return "\n" + top + "\n" + codeLines.join("\n") + "\n" + bottom + "\n";
+    }
+    case "codespan": {
+      const code = token.text || "";
+      // Use a lighter background for inline code to make it more visible
+      return chalk.bgHex("#3a3a3a").hex("#f8f8f2")(` ${code} `);
+    }
+    case "link": {
+      const text = renderer(token.tokens || []);
+      const href = token.href || "";
+      const linkText = text || href;
+      return chalk.hex("#4a9eff").underline(linkText);
+    }
+    case "list": {
+      const items = (token.items || []).map((item: any) => renderToken(item, renderer)).join("");
+      return items + "\n";
+    }
+    case "list_item": {
+      const text = renderer(token.tokens || []);
+      // Use the brand color for bullet points, matching the second image style
+      return chalk.hex(ASSISTANT_COLOR)("  • ") + text + "\n";
+    }
+    case "blockquote": {
+      const text = renderer(token.tokens || []);
+      const lines = text.split("\n").filter((l: string) => l.trim());
+      // Use a more subtle gray for blockquotes
+      return lines.map((line: string) => chalk.hex("#666").italic(`  │ ${line}`)).join("\n") + "\n";
+    }
+    case "hr": {
+      const width = Math.min(getTerminalWidth() - 4, 60);
+      return chalk.hex("#555")("─".repeat(width)) + "\n";
+    }
+    case "paragraph": {
+      const text = renderer(token.tokens || []);
+      return text + "\n\n";
+    }
+    case "br": {
+      return "\n";
+    }
+    case "text": {
+      // Regular text should use the default message color (which is applied by the bubble)
+      // Don't apply any color here - let the bubble styling handle it
+      const text = token.text || "";
+      // Only apply default color if text doesn't already have ANSI codes
+      if (!text.includes("\x1B[")) {
+        return text;
+      }
+      return text;
+    }
+    case "space": {
+      return " ";
+    }
+    default: {
+      // For unknown token types, try to render children
+      if (token.tokens && Array.isArray(token.tokens)) {
+        return renderer(token.tokens);
+      }
+      return token.text || "";
+    }
+  }
+}
+
+/**
+ * Render markdown to styled terminal text.
+ */
+function renderMarkdown(markdown: string): string {
+  try {
+    // Configure marked to parse markdown properly
+    marked.setOptions({
+      breaks: true,
+      gfm: true,
+    });
+    
+    // Parse markdown to tokens
+    const tokens = marked.lexer(markdown);
+    
+    // Render tokens recursively
+    const renderer = (tokenList: any[]): string => {
+      if (!tokenList || tokenList.length === 0) {
+        return "";
+      }
+      return tokenList.map((token) => renderToken(token, renderer)).join("");
+    };
+    
+    const result = renderer(tokens);
+    // Remove trailing newlines but preserve structure
+    let cleaned = result.trimEnd();
+    
+    // Post-process to catch any unparsed markdown syntax
+    // This handles cases where markdown syntax might not have been tokenized correctly
+    // First handle bold (**text**)
+    cleaned = cleaned.replace(/\*\*([^*]+?)\*\*/g, (match, text) => {
+      // Only replace if it looks like markdown (not already styled with ANSI codes)
+      if (!match.includes("\x1B[")) {
+        return chalk.whiteBright.bold(text);
+      }
+      return match;
+    });
+    
+    // Then handle italic (*text*) - but avoid matching **text**
+    // We'll match single asterisks that aren't part of double asterisks
+    cleaned = cleaned.replace(/(^|[^*])\*([^*\n]+?)\*([^*]|$)/g, (match, before, text, after) => {
+      if (!match.includes("\x1B[")) {
+        return (before || "") + chalk.italic(text) + (after || "");
+      }
+      return match;
+    });
+    
+    return cleaned;
+  } catch (error) {
+    // If markdown parsing fails, try to clean up common markdown artifacts
+    // Remove literal ** markers that weren't parsed
+    let cleaned = markdown.replace(/\*\*([^*]+)\*\*/g, (match, text) => {
+      return chalk.whiteBright.bold(text);
+    });
+    // Remove literal * markers for italic (but not if it's part of **)
+    cleaned = cleaned.replace(/(^|[^*])\*([^*\n]+?)\*([^*]|$)/g, (match, before, text, after) => {
+      return (before || "") + chalk.italic(text) + (after || "");
+    });
+    // Remove literal backticks for inline code
+    cleaned = cleaned.replace(/`([^`]+)`/g, (match, code) => {
+      return chalk.bgHex("#3a3a3a").hex("#f8f8f2")(` ${code} `);
+    });
+    return cleaned;
+  }
+}
+
+/**
+ * Word wrap text to fit within a given width, handling ANSI codes.
  */
 function wordWrap(text: string, maxWidth: number): string[] {
   const lines: string[] = [];
@@ -396,14 +583,44 @@ function wordWrap(text: string, maxWidth: number): string[] {
       continue;
     }
     
-    const words = paragraph.split(" ");
+    // Split by words, but preserve ANSI codes
+    const words: string[] = [];
+    let currentWord = "";
+    let inAnsi = false;
+    
+    for (let i = 0; i < paragraph.length; i++) {
+      const char = paragraph[i]!;
+      currentWord += char;
+      
+      // Check for ANSI escape sequences
+      if (char === "\x1B") {
+        inAnsi = true;
+      } else if (inAnsi && /[a-zA-Z]/.test(char)) {
+        inAnsi = false;
+      }
+      
+      // If we hit a space and we're not in an ANSI sequence, split
+      if (char === " " && !inAnsi) {
+        if (currentWord.trim()) {
+          words.push(currentWord);
+        }
+        currentWord = "";
+      }
+    }
+    if (currentWord.trim()) {
+      words.push(currentWord);
+    }
+    
     let currentLine = "";
     
     for (const word of words) {
-      if (currentLine.length === 0) {
+      const wordLength = visibleLength(word);
+      const currentLength = visibleLength(currentLine);
+      
+      if (currentLength === 0) {
         currentLine = word;
-      } else if (currentLine.length + 1 + word.length <= maxWidth) {
-        currentLine += " " + word;
+      } else if (currentLength + 1 + wordLength <= maxWidth) {
+        currentLine += (currentLine.endsWith(" ") ? "" : " ") + word;
       } else {
         lines.push(currentLine);
         currentLine = word;
@@ -452,28 +669,61 @@ export function renderUserMessage(content: string): string {
 }
 
 /**
- * Render an assistant message bubble.
+ * Render an assistant message bubble with markdown support.
  */
 export function renderAssistantMessage(content: string): string {
   const terminalWidth = getTerminalWidth();
   const maxBubbleWidth = Math.min(Math.floor(terminalWidth * 0.85), 80);
   const innerWidth = maxBubbleWidth - 4;
   
-  const wrappedLines = wordWrap(content, innerWidth);
-  const bubbleWidth = Math.max(...wrappedLines.map(l => l.length), 10) + 4;
+  // Render markdown to styled text
+  const markdownRendered = renderMarkdown(content);
+  
+  // Split into lines and wrap each paragraph
+  const paragraphs = markdownRendered.split("\n\n");
+  const allLines: string[] = [];
+  
+  for (const paragraph of paragraphs) {
+    if (paragraph.trim() === "") {
+      allLines.push("");
+      continue;
+    }
+    
+    // Split paragraph into lines (preserving existing line breaks from markdown)
+    const paragraphLines = paragraph.split("\n");
+    for (const line of paragraphLines) {
+      if (line.trim() === "") {
+        allLines.push("");
+      } else {
+        // Wrap long lines
+        const wrapped = wordWrap(line, innerWidth);
+        allLines.push(...wrapped);
+      }
+    }
+    // Add spacing between paragraphs
+    if (paragraphs.indexOf(paragraph) < paragraphs.length - 1) {
+      allLines.push("");
+    }
+  }
+  
+  // Calculate bubble width based on visible length (ignoring ANSI codes)
+  const maxVisibleWidth = Math.max(...allLines.map(l => visibleLength(l)), 10);
+  const bubbleWidth = maxVisibleWidth + 4;
   
   const lines: string[] = [];
   const assistantLabel = brand.bold("✦ SMASK");
   lines.push(assistantLabel);
   
   const border = chalk.hex(ASSISTANT_COLOR);
-  const horizontal = bubbleWidth - 2;
+  const horizontal = Math.min(bubbleWidth - 2, maxBubbleWidth - 2);
   
   lines.push(border(`╭${"─".repeat(horizontal)}╮`));
   
-  for (const line of wrappedLines) {
-    const padding = " ".repeat(bubbleWidth - 4 - line.length);
-    const styledContent = chalk.bgHex(ASSISTANT_BG).hex("#fff4d6")(` ${line}${padding} `);
+  for (const line of allLines) {
+    const visibleLen = visibleLength(line);
+    const padding = Math.max(0, bubbleWidth - 4 - visibleLen);
+    const paddingStr = " ".repeat(padding);
+    const styledContent = chalk.bgHex(ASSISTANT_BG).hex("#fff4d6")(` ${line}${paddingStr} `);
     lines.push(border("│") + styledContent + border("│"));
   }
   
