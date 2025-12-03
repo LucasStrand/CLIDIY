@@ -12,6 +12,7 @@ import {
   brand,
   buildHomeScreenLayout,
   buildPromptBoxLines,
+  renderPromptBoxBlock,
 } from "./ui.js";
 import {
   getDefaultModel,
@@ -95,24 +96,17 @@ async function selectVim<T>(opts: {
     return wrapped;
   };
   const writeFrame = (frame: string, initial: boolean): void => {
-    if (fullScreen) {
-      console.clear();
-      process.stdout.write(hide + frame);
-      return;
-    }
-    if (initial) {
-      process.stdout.write(hide + frame);
-      return;
-    }
-    process.stdout.write(moveToTop() + "\x1B[0J" + frame);
+    // Always clear and reset cursor position for reliable rendering
+    // Use escape sequences for more reliable clearing
+    process.stdout.write("\x1B[2J"); // Clear entire screen
+    process.stdout.write("\x1B[H");  // Move cursor to top-left (row 1, column 1)
+    process.stdout.write(hide + frame);
   };
 
   const clearFrame = (): void => {
-    if (fullScreen) {
-      console.clear();
-    } else {
-      process.stdout.write(moveToTop() + "\x1B[0J");
-    }
+    // Always clear screen and reset cursor position
+    process.stdout.write("\x1B[2J"); // Clear entire screen
+    process.stdout.write("\x1B[H");  // Move cursor to top-left
   };
 
   return new Promise<T>((resolve, reject) => {
@@ -227,7 +221,6 @@ async function captureChatInput(
 
   let text = "";
   let cursorHidden = false;
-  let promptBoxLines = 0;
 
   const render = () => {
     if (!cursorHidden) {
@@ -235,38 +228,14 @@ async function captureChatInput(
       cursorHidden = true;
     }
     
-    if (!hasShownHomeScreen) {
-      // First time: show full home screen
-      console.clear();
-      const menuBlock = renderMenuBlock(choices, hasModel);
-      process.stdout.write(
-        buildHomeScreenLayout(menuBlock, hasModel, text.length > 0 ? text : "")
-      );
-      promptBoxLines = 3; // Prompt box is 3 lines
-      hasShownHomeScreen = true;
-      hasActivePromptBox = true;
-    } else if (hasActivePromptBox) {
-      // Update existing prompt box inline
-      if (promptBoxLines > 0) {
-        // Move up to where prompt box is and clear it
-        process.stdout.write(`\x1B[${promptBoxLines}A\x1B[0J`);
-      }
-      // Draw updated prompt box
-      const newPromptLines = buildPromptBoxLines(text.length > 0 ? text : undefined);
-      newPromptLines.forEach((line) => {
-        process.stdout.write(line + "\n");
-      });
-      promptBoxLines = newPromptLines.length;
-    } else if (text.length > 0) {
-      // No active prompt box but user started typing - create a new one below current content
-      const newPromptLines = buildPromptBoxLines(text);
-      newPromptLines.forEach((line) => {
-        process.stdout.write(line + "\n");
-      });
-      promptBoxLines = newPromptLines.length;
-      hasActivePromptBox = true;
-    }
-    // If hasActivePromptBox is false and text is empty, don't render anything
+    // Always re-render the full home screen to avoid cursor positioning issues
+    console.clear();
+    const menuBlock = renderMenuBlock(choices, hasModel);
+    process.stdout.write(
+      buildHomeScreenLayout(menuBlock, hasModel, text.length > 0 ? text : "")
+    );
+    hasShownHomeScreen = true;
+    hasActivePromptBox = true;
   };
 
   return new Promise<string | undefined>((resolve) => {
@@ -405,6 +374,9 @@ export async function runInteractiveMenu(): Promise<void> {
         } else {
           // User submitted a question
           await processQuestion(question, choices);
+          // Reset home screen state so it renders fresh after showing answer
+          hasShownHomeScreen = false;
+          hasActivePromptBox = false;
         }
       } else {
         // No model configured - show menu
@@ -490,10 +462,15 @@ async function processQuestion(question: string, choices: Choice<MainMenuAction>
     }
     
     console.log("\n");
+    // Wait for user to press Enter before returning to input
+    console.log(chalk.gray("Press Enter to continue..."));
+    await waitForEnter();
   } catch (error) {
     spinner.stop();
     const message = error instanceof Error ? error.message : String(error);
     displayError(`Failed to get response: ${message}`);
+    console.log(chalk.gray("Press Enter to continue..."));
+    await waitForEnter();
   }
 }
 
