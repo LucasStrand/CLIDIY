@@ -1,7 +1,8 @@
 import chalk from "chalk";
 import ora, { type Ora } from "ora";
-import { getDefaultModel, isGeminiConfigured } from "../config/config.js";
-import { getModel, hasConfiguredModel } from "../models/registry.js";
+import { homedir } from "node:os";
+import { getDefaultModel } from "../config/config.js";
+import { getModel } from "../models/registry.js";
 
 // Smartteknik brand color
 export const BRAND_COLOR = "#feba17";
@@ -33,6 +34,46 @@ const GRADIENT_COLORS = [
   "#e85d04", // Burnt orange
 ];
 
+const PROMPT_BORDER_COLOR = BRAND_COLOR;
+const PROMPT_BACKGROUND_COLOR = "#1a1400";
+const PROMPT_TEXT_COLOR = "#fff4d6";
+
+function getTerminalWidth(): number {
+  const columns = process.stdout.columns;
+  if (!columns || columns <= 0) {
+    return 80;
+  }
+  return columns;
+}
+
+function normalizePath(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+function formatWorkingDirectory(): string {
+  const cwd = normalizePath(process.cwd());
+  const home = normalizePath(homedir());
+
+  if (cwd === home) {
+    return "~";
+  }
+
+  if (cwd.startsWith(home)) {
+    const suffix = cwd.slice(home.length);
+    return suffix ? `~${suffix}` : "~";
+  }
+
+  return cwd;
+}
+
+function getPromptWidth(): number {
+  const terminalWidth = getTerminalWidth();
+  const minWidth = Math.min(50, terminalWidth);
+  const maxWidth = Math.min(terminalWidth, 90);
+  const width = Math.max(minWidth, maxWidth);
+  return Math.max(width, 30);
+}
+
 /**
  * Apply gradient colors to a line of text.
  */
@@ -44,32 +85,75 @@ function applyGradient(text: string, colorIndex: number): string {
 /**
  * Display the SMASK logo with gradient colors.
  */
+function renderLogoBlock(): string {
+  const gradientLines = LOGO_LINES.map((line, index) => applyGradient(line, index));
+  return ["", ...gradientLines, ""].join("\n");
+}
+
 export function displayLogo(): void {
-  console.log();
-  LOGO_LINES.forEach((line, index) => {
-    console.log(applyGradient(line, index));
-  });
-  console.log();
+  console.log(renderLogoBlock());
+}
+
+function renderTipsBlock(): string {
+  const lines = [
+    chalk.gray("Tips for getting started:"),
+    chalk.gray("1. Ask questions, explore ideas, or get help with tasks."),
+    chalk.gray("2. Be specific for the best results."),
+    chalk.gray("3. ") + brand("/help") + chalk.gray(" for more information."),
+    "",
+  ];
+  return lines.join("\n");
 }
 
 /**
  * Display tips for getting started.
  */
-export function displayTips(): void {
-  console.log(chalk.gray("Tips for getting started:"));
-  console.log(chalk.gray("1. Ask questions, explore ideas, or get help with tasks."));
-  console.log(chalk.gray("2. Be specific for the best results."));
-  console.log(chalk.gray("3. ") + brand("/help") + chalk.gray(" for more information."));
-  console.log();
+function truncateText(value: string, maxLength: number): string {
+  if (maxLength <= 0) {
+    return "";
+  }
+  if (value.length <= maxLength) {
+    return value;
+  }
+  if (maxLength === 1) {
+    return value.slice(0, 1);
+  }
+  return `${value.slice(0, maxLength - 1)}…`;
+}
+
+export function buildPromptBoxLines(content?: string): string[] {
+  const placeholder = content ?? "Type your message or @path/to/file";
+  const terminalWidth = getTerminalWidth();
+  const desiredWidth = Math.max(getPromptWidth(), placeholder.length + 8);
+  const unclampedWidth = Math.min(desiredWidth, terminalWidth);
+  const width = terminalWidth < 30 ? terminalWidth : Math.max(unclampedWidth, 30);
+  const innerWidth = Math.max(width - 4, 2);
+  const contentWidth = Math.max(innerWidth - 1, 1);
+  const placeholderWidth = Math.max(contentWidth - 1, 1);
+  const trimmedPlaceholder = truncateText(placeholder, placeholderWidth);
+  const paddedContent = ` ${trimmedPlaceholder}`.padEnd(contentWidth, " ");
+  const border = chalk.hex(PROMPT_BORDER_COLOR);
+  const arrowSegment = chalk
+    .bgHex(PROMPT_BACKGROUND_COLOR)
+    .hex(BRAND_COLOR)(">");
+  const textSegment = chalk
+    .bgHex(PROMPT_BACKGROUND_COLOR)
+    .hex(PROMPT_TEXT_COLOR)(paddedContent);
+  const horizontal = Math.max(width - 2, 2);
+
+  return [
+    border(`╭${"─".repeat(horizontal)}╮`),
+    border("│ ") + arrowSegment + textSegment + border(" │"),
+    border(`╰${"─".repeat(horizontal)}╯`),
+  ];
 }
 
 /**
- * Display the welcome screen with logo and tips.
+ * Display a Gemini-style prompt box with placeholder text.
  */
-export function displayWelcome(): void {
-  console.clear();
-  displayLogo();
-  displayTips();
+export function displayPromptBox(placeholder?: string): void {
+  buildPromptBoxLines(placeholder).forEach((line) => console.log(line));
+  console.log();
 }
 
 /**
@@ -95,31 +179,24 @@ export function showThinking(message: string = "Thinking..."): Ora {
 /**
  * Display the status bar at the bottom.
  */
-export function displayStatusBar(): void {
+function buildStatusLine(): string {
   const parts: string[] = [];
 
-  // Current model
+  parts.push(chalk.white(formatWorkingDirectory()));
+
   const defaultModel = getDefaultModel() ?? "gemini";
   const model = getModel(defaultModel);
-  
-  if (model) {
-    parts.push(chalk.gray(`~/code/smask-cli`));
-    
-    // Auth status
-    if (isGeminiConfigured()) {
-      parts.push(chalk.green("api key set"));
-    } else {
-      parts.push(chalk.yellow("no api key") + chalk.gray(" (see /docs)"));
-    }
-    
-    // Model name
-    parts.push(brand(`${defaultModel}`) + chalk.gray(" (99% context left)"));
-  } else {
-    parts.push(chalk.yellow("No model configured"));
-  }
+  const contextLabel = model?.isConfigured()
+    ? chalk.gray("(100% context left)")
+    : chalk.gray("(context unavailable)");
+  parts.push(`${brand(defaultModel)} ${contextLabel}`);
 
+  return parts.join(chalk.gray("    "));
+}
+
+export function displayStatusBar(): void {
   console.log();
-  console.log(parts.join("          "));
+  console.log(buildStatusLine());
 }
 
 /**
@@ -171,6 +248,33 @@ export function displayDivider(): void {
  */
 export function displayPrompt(): void {
   process.stdout.write(brand("> "));
+}
+
+export function renderPromptBoxBlock(text?: string): string {
+  const lines = buildPromptBoxLines(text);
+  return ["", ...lines, ""].join("\n");
+}
+
+export function renderStatusBarBlock(): string {
+  return ["", buildStatusLine()].join("\n");
+}
+
+export function displayHomePreview(hasModel: boolean): void {
+  console.clear();
+  console.log(buildHomeScreenLayout("", hasModel));
+}
+
+export function buildHomeScreenLayout(
+  _menuBlock: string,
+  _hasModel: boolean,
+  promptText?: string
+): string {
+  return [
+    renderLogoBlock(),
+    renderTipsBlock(),
+    renderPromptBoxBlock(promptText),
+    renderStatusBarBlock(),
+  ].join("\n");
 }
 
 /**

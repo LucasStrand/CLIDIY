@@ -19,6 +19,8 @@ Ask LLMs questions directly from your terminal.
 - **Gemini Integration**: Works with Google's Gemini AI models
 - **OAuth & API Key**: Flexible authentication options
 - **Streaming Responses**: See answers as they're generated
+- **Gemini-style Welcome Screen**: Gradient intro with a colored chat box that shows your current directory and selected model/context (inspired by [google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli))
+- **Insert Mode Shortcut**: Hit `i` to jump straight into the chat box from the home screen (or use `Enter` on the highlighted option)
 
 ## Installation
 
@@ -75,11 +77,14 @@ smask "How do I create a React component?"
 smask
 ```
 
+When interactive mode launches you land on a Gemini-inspired home screen with the action menu sitting directly above the chat box. The status bar reminds you where you are on disk and which model/context window is active so you always know what environment you are about to use. Press `i` (insert) or `Enter` to jump straight into the chat box; you can type your entire question directly inside that box without leaving the home screen, or continue to nav with the keys below.
+
 Navigate with:
 
 - `j` / `↓` - Move down
 - `k` / `↑` - Move up
 - `Enter` - Select
+- `i` - Insert mode (shortcut to “Ask a question”)
 - `q` / `Esc` - Go back / Exit
 
 ### Commands

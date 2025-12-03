@@ -2,8 +2,7 @@ import chalk from "chalk";
 import readline from "node:readline";
 import { input, confirm } from "@inquirer/prompts";
 import {
-  displayLogo,
-  displayTips,
+  displayHomePreview,
   displayError,
   displaySuccess,
   displayHelp,
@@ -11,6 +10,8 @@ import {
   showThinking,
   formatResponse,
   brand,
+  buildHomeScreenLayout,
+  buildPromptBoxLines,
 } from "./ui.js";
 import {
   getDefaultModel,
@@ -36,32 +37,82 @@ interface Choice<T> {
  * Custom select with vim keybindings (j/k, gg, G, q/Esc).
  */
 async function selectVim<T>(opts: {
-  message: string;
+  message?: string;
   choices: Choice<T>[];
+  layout?: (content: string) => string;
+  pointer?: { active: string; inactive: string };
+  choiceFormatter?: (choice: Choice<T>, isSelected: boolean) => string;
+  quickSelects?: { key: string; value: T }[];
+  fullScreen?: boolean;
 }): Promise<T> {
-  const { message, choices } = opts;
+  const {
+    message = "",
+    choices,
+    layout,
+    pointer,
+    choiceFormatter,
+    quickSelects,
+    fullScreen = false,
+  } = opts;
   if (choices.length === 0) {
     throw new Error("No choices available.");
   }
 
   let index = 0;
   let ggAt: number | null = null;
-  const totalLines = () => 1 + choices.length;
   const hide = "\x1B[?25l"; // Hide cursor
   const show = "\x1B[?25h"; // Show cursor
-  const moveToTop = () => `\x1B[${Math.max(0, totalLines() - 1)}A\x1B[0G`;
-  
-  const render = () => {
-    const out: string[] = [];
-    out.push(`${chalk.bold(message)}\n`);
-    for (let i = 0; i < choices.length; i++) {
-      const pointer = i === index ? brand("❯") : " ";
-      const choice = choices[i]!;
-      const label = i === index ? brand(choice.name) : choice.name;
-      out.push(`${pointer} ${label}`);
-      if (i < choices.length - 1) out.push("\n");
+  const pointerActive = pointer?.active ?? brand("❯");
+  const pointerInactive = pointer?.inactive ?? " ";
+  const formatChoice =
+    choiceFormatter ??
+    ((choice: Choice<T>, isSelected: boolean) =>
+      isSelected ? brand(choice.name) : choice.name);
+
+  let lastRenderLines = 0;
+  const moveToTop = () =>
+    lastRenderLines > 0 ? `\x1B[${lastRenderLines}A\x1B[0G` : "";
+
+  const baseRender = (): string => {
+    const lines: string[] = [];
+    if (message.trim().length > 0) {
+      lines.push(chalk.bold(message));
+      lines.push("");
     }
-    return out.join("");
+    for (let i = 0; i < choices.length; i++) {
+      const pointerSymbol = i === index ? pointerActive : pointerInactive;
+      const choice = choices[i]!;
+      const label = formatChoice(choice, i === index);
+      lines.push(`${pointerSymbol} ${label}`);
+    }
+    return lines.join("\n");
+  };
+
+  const render = (): string => {
+    const content = baseRender();
+    const wrapped = layout ? layout(content) : content;
+    lastRenderLines = wrapped.split("\n").length;
+    return wrapped;
+  };
+  const writeFrame = (frame: string, initial: boolean): void => {
+    if (fullScreen) {
+      console.clear();
+      process.stdout.write(hide + frame);
+      return;
+    }
+    if (initial) {
+      process.stdout.write(hide + frame);
+      return;
+    }
+    process.stdout.write(moveToTop() + "\x1B[0J" + frame);
+  };
+
+  const clearFrame = (): void => {
+    if (fullScreen) {
+      console.clear();
+    } else {
+      process.stdout.write(moveToTop() + "\x1B[0J");
+    }
   };
 
   return new Promise<T>((resolve, reject) => {
@@ -72,8 +123,8 @@ async function selectVim<T>(opts: {
       process.stdin.setRawMode(true);
     }
     process.stdin.resume();
-    
-    process.stdout.write(hide + render());
+    const initialRender = render();
+    writeFrame(initialRender, true);
 
     const cleanup = () => {
       process.stdout.write(show);
@@ -93,15 +144,25 @@ async function selectVim<T>(opts: {
       
       // Handle Enter - select current item
       if (key?.name === "return") {
-        process.stdout.write(moveToTop() + "\x1B[0J");
+        clearFrame();
         cleanup();
         resolve(choices[index]!.value);
         return;
       }
+      if (str && quickSelects) {
+        const quick = quickSelects.find((q) => q.key === str);
+        if (quick) {
+          clearFrame();
+          cleanup();
+          resolve(quick.value);
+          return;
+        }
+      }
+
       
       // Handle Escape or q - cancel
       if (key?.name === "escape" || str === "q") {
-        process.stdout.write(moveToTop() + "\x1B[0J");
+        clearFrame();
         cleanup();
         reject(new Error("Cancelled"));
         return;
@@ -135,10 +196,159 @@ async function selectVim<T>(opts: {
       
       // Re-render if selection changed
       if (prev !== index) {
-        process.stdout.write(moveToTop() + "\x1B[0J" + render());
+        const frame = render();
+        writeFrame(frame, false);
       }
     };
 
+    process.stdin.on("keypress", onKey);
+  });
+}
+
+function renderMenuBlock(choices: Choice<MainMenuAction>[], hasModel: boolean): string {
+  const lines: string[] = [];
+  for (let i = 0; i < choices.length; i++) {
+    const choice = choices[i]!;
+    const label = chalk.gray(choice.name);
+    lines.push(`  ${label}`);
+  }
+  return lines.join("\n");
+}
+
+let hasShownHomeScreen = false;
+let hasActivePromptBox = false;
+
+async function captureChatInput(
+  hasModel: boolean,
+  choices: Choice<MainMenuAction>[]
+): Promise<string | undefined> {
+  const hide = "\x1B[?25l";
+  const show = "\x1B[?25h";
+
+  let text = "";
+  let cursorHidden = false;
+  let promptBoxLines = 0;
+
+  const render = () => {
+    if (!cursorHidden) {
+      process.stdout.write(hide);
+      cursorHidden = true;
+    }
+    
+    if (!hasShownHomeScreen) {
+      // First time: show full home screen
+      console.clear();
+      const menuBlock = renderMenuBlock(choices, hasModel);
+      process.stdout.write(
+        buildHomeScreenLayout(menuBlock, hasModel, text.length > 0 ? text : "")
+      );
+      promptBoxLines = 3; // Prompt box is 3 lines
+      hasShownHomeScreen = true;
+      hasActivePromptBox = true;
+    } else if (hasActivePromptBox) {
+      // Update existing prompt box inline
+      if (promptBoxLines > 0) {
+        // Move up to where prompt box is and clear it
+        process.stdout.write(`\x1B[${promptBoxLines}A\x1B[0J`);
+      }
+      // Draw updated prompt box
+      const newPromptLines = buildPromptBoxLines(text.length > 0 ? text : undefined);
+      newPromptLines.forEach((line) => {
+        process.stdout.write(line + "\n");
+      });
+      promptBoxLines = newPromptLines.length;
+    } else if (text.length > 0) {
+      // No active prompt box but user started typing - create a new one below current content
+      const newPromptLines = buildPromptBoxLines(text);
+      newPromptLines.forEach((line) => {
+        process.stdout.write(line + "\n");
+      });
+      promptBoxLines = newPromptLines.length;
+      hasActivePromptBox = true;
+    }
+    // If hasActivePromptBox is false and text is empty, don't render anything
+  };
+
+  return new Promise<string | undefined>((resolve) => {
+    process.stdin.removeAllListeners("keypress");
+    readline.emitKeypressEvents(process.stdin);
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+    }
+    process.stdin.resume();
+
+    const cleanup = () => {
+      if (cursorHidden) {
+        process.stdout.write(show);
+        cursorHidden = false;
+      }
+      process.stdin.removeListener("keypress", onKey);
+      if (process.stdin.isTTY) {
+        process.stdin.setRawMode(false);
+      }
+    };
+
+    const submit = () => {
+      const value = text;
+      // Mark prompt box as inactive so next input creates a new one
+      hasActivePromptBox = false;
+      cleanup();
+      resolve(value);
+    };
+
+    const cancel = () => {
+      // Mark prompt box as inactive
+      hasActivePromptBox = false;
+      cleanup();
+      resolve(undefined);
+    };
+
+    const onKey = (str: string | undefined, key: readline.Key | undefined) => {
+      if (key?.ctrl && key?.name === "c") {
+        cleanup();
+        process.stdout.write("\n");
+        process.exit(0);
+      }
+
+      if (key?.name === "return") {
+        submit();
+        return;
+      }
+
+      if (key?.name === "escape") {
+        cancel();
+        return;
+      }
+
+      if (key?.name === "backspace") {
+        if (text.length > 0) {
+          text = text.slice(0, -1);
+        }
+        render();
+        return;
+      }
+
+      // Arrow keys exit insert mode and return to menu
+      if (key?.name === "up" || key?.name === "down") {
+        cancel();
+        return;
+      }
+
+      if (
+        key?.name === "tab" ||
+        key?.name === "left" ||
+        key?.name === "right"
+      ) {
+        return;
+      }
+
+      if (str) {
+        text += str;
+        render();
+      }
+    };
+
+    render();
     process.stdin.on("keypress", onKey);
   });
 }
@@ -147,13 +357,10 @@ async function selectVim<T>(opts: {
  * Run the main interactive menu.
  */
 export async function runInteractiveMenu(): Promise<void> {
-  displayLogo();
-  displayTips();
-
   let exit = false;
   while (!exit) {
     const hasModel = hasConfiguredModel();
-    
+
     const choices: Choice<MainMenuAction>[] = [
       ...(hasModel ? [{ name: "Ask a question", value: "ask" as MainMenuAction }] : []),
       { name: "Settings", value: "settings" },
@@ -162,24 +369,68 @@ export async function runInteractiveMenu(): Promise<void> {
     ];
 
     try {
-      const action = await selectVim({
-        message: hasModel ? "What would you like to do?" : "Configure a model to get started:",
-        choices,
-      });
+      // If model is configured, start directly in insert mode
+      if (hasModel) {
+        const question = await captureChatInput(hasModel, choices);
+        
+        if (question === undefined) {
+          // User pressed Esc - show menu for navigation
+          const action = await selectVim({
+            message: "",
+            choices,
+            layout: (content) => buildHomeScreenLayout(content, hasModel),
+            pointer: {
+              active: brand("❯"),
+              inactive: chalk.gray(" "),
+            },
+            choiceFormatter: (choice, selected) => chalk.gray(choice.name),
+            quickSelects: [{ key: "i", value: "ask" as MainMenuAction }],
+            fullScreen: true,
+          });
 
-      switch (action) {
-        case "ask":
-          await handleAskQuestion();
-          break;
-        case "settings":
-          await handleSettings();
-          break;
-        case "help":
-          displayHelp();
-          break;
-        case "exit":
-          exit = true;
-          break;
+          switch (action) {
+            case "ask":
+              await handleAskQuestion(choices);
+              break;
+            case "settings":
+              await handleSettings();
+              break;
+            case "help":
+              displayHelp();
+              break;
+            case "exit":
+              exit = true;
+              break;
+          }
+        } else {
+          // User submitted a question
+          await processQuestion(question, choices);
+        }
+      } else {
+        // No model configured - show menu
+        const action = await selectVim({
+          message: "",
+          choices,
+          layout: (content) => buildHomeScreenLayout(content, hasModel),
+          pointer: {
+            active: brand("❯"),
+            inactive: chalk.gray(" "),
+          },
+          choiceFormatter: (choice, selected) => chalk.gray(choice.name),
+          fullScreen: true,
+        });
+
+        switch (action) {
+          case "settings":
+            await handleSettings();
+            break;
+          case "help":
+            displayHelp();
+            break;
+          case "exit":
+            exit = true;
+            break;
+        }
       }
     } catch {
       // User pressed Ctrl+C or escaped
@@ -192,27 +443,21 @@ export async function runInteractiveMenu(): Promise<void> {
 }
 
 /**
- * Handle the "Ask a question" flow.
+ * Process a submitted question.
  */
-async function handleAskQuestion(): Promise<void> {
-  let question: string;
-  try {
-    question = await input({
-      message: "Your question:",
-    });
-  } catch {
-    // User cancelled
-    return;
-  }
+async function processQuestion(question: string, choices: Choice<MainMenuAction>[]): Promise<void> {
+  const normalizedQuestion = question.trim();
 
-  if (!question.trim()) {
+  if (!normalizedQuestion) {
     displayError("Please enter a question.");
     return;
   }
 
   // Handle special commands
-  if (question.startsWith("/")) {
-    await handleCommand(question);
+  if (normalizedQuestion.startsWith("/")) {
+    // Let the command control what is shown on screen.
+    // We don't redraw the home layout here so answers and help text remain visible.
+    await handleCommand(normalizedQuestion);
     return;
   }
 
@@ -238,7 +483,7 @@ async function handleAskQuestion(): Promise<void> {
     
     process.stdout.write(brand("✦ "));
     
-    for await (const chunk of model.streamQuery(question)) {
+    for await (const chunk of model.streamQuery(normalizedQuestion)) {
       if (!chunk.done) {
         process.stdout.write(formatResponse(chunk.text));
       }
@@ -250,7 +495,64 @@ async function handleAskQuestion(): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     displayError(`Failed to get response: ${message}`);
   }
-  
+}
+
+/**
+ * Handle the "Ask a question" flow.
+ */
+async function handleAskQuestion(choices?: Choice<MainMenuAction>[]): Promise<void> {
+  const hasModel = hasConfiguredModel();
+  const menuChoices = choices ?? [
+    ...(hasModel ? [{ name: "Ask a question", value: "ask" as MainMenuAction }] : []),
+    { name: "Settings", value: "settings" },
+    { name: "Help", value: "help" },
+    { name: "Exit", value: "exit" },
+  ];
+  const question = await captureChatInput(hasModel, menuChoices);
+
+  if (question === undefined) {
+    // User cancelled insert mode - return to menu
+    return;
+  }
+
+  await processQuestion(question, menuChoices);
+}
+
+/**
+ * Wait for user to press Enter before continuing.
+ */
+function waitForEnter(): Promise<void> {
+  return new Promise((resolve) => {
+    process.stdin.removeAllListeners("keypress");
+    readline.emitKeypressEvents(process.stdin);
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+    }
+    process.stdin.resume();
+
+    const cleanup = () => {
+      process.stdin.removeListener("keypress", onKey);
+      if (process.stdin.isTTY) {
+        process.stdin.setRawMode(false);
+      }
+    };
+
+    const onKey = (str: string | undefined, key: readline.Key | undefined) => {
+      if (key?.ctrl && key?.name === "c") {
+        cleanup();
+        process.stdout.write("\n");
+        process.exit(0);
+      }
+
+      if (key?.name === "return") {
+        cleanup();
+        resolve();
+        return;
+      }
+    };
+
+    process.stdin.on("keypress", onKey);
+  });
 }
 
 /**
@@ -262,24 +564,32 @@ async function handleCommand(command: string): Promise<void> {
   switch (cmd) {
     case "/help":
       displayHelp();
+      console.log(chalk.gray("\nPress Enter to continue..."));
+      await waitForEnter();
       break;
     case "/settings":
       await handleSettings();
       break;
     case "/clear":
-      console.clear();
-      displayLogo();
-      displayTips();
+      hasShownHomeScreen = false; // Reset so full screen shows again
+      hasActivePromptBox = false; // Reset prompt box state
+      displayHomePreview(hasConfiguredModel());
+      hasShownHomeScreen = true; // Mark as shown
+      hasActivePromptBox = true; // Mark prompt box as active
       break;
     case "/exit":
     case "/quit":
       process.exit(0);
     case "/status":
       displayConfigStatus();
+      console.log(chalk.gray("\nPress Enter to continue..."));
+      await waitForEnter();
       break;
     default:
       displayError(`Unknown command: ${command}`);
       console.log(chalk.gray("Type /help for available commands."));
+      console.log(chalk.gray("\nPress Enter to continue..."));
+      await waitForEnter();
   }
 }
 
