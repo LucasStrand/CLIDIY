@@ -12,7 +12,7 @@ export const brand = chalk.hex(BRAND_COLOR);
 
 // Chat message types
 export interface ChatMessage {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system" | "command";
   content: string;
   timestamp?: Date;
 }
@@ -101,7 +101,9 @@ function applyGradient(text: string, colorIndex: number): string {
  * Display the SMASK logo with gradient colors.
  */
 export function renderLogoBlock(): string {
-  const gradientLines = LOGO_LINES.map((line, index) => applyGradient(line, index));
+  const gradientLines = LOGO_LINES.map((line, index) =>
+    applyGradient(line, index)
+  );
   return ["", ...gradientLines, ""].join("\n");
 }
 
@@ -146,9 +148,9 @@ export function buildPromptBoxLines(content?: string): string[] {
   const trimmedPlaceholder = truncateText(placeholder, placeholderWidth);
   const paddedContent = ` ${trimmedPlaceholder}`.padEnd(contentWidth, " ");
   const border = chalk.hex(PROMPT_BORDER_COLOR);
-  const arrowSegment = chalk
-    .bgHex(PROMPT_BACKGROUND_COLOR)
-    .hex(BRAND_COLOR)(">");
+  const arrowSegment = chalk.bgHex(PROMPT_BACKGROUND_COLOR).hex(BRAND_COLOR)(
+    ">"
+  );
   const textSegment = chalk
     .bgHex(PROMPT_BACKGROUND_COLOR)
     .hex(PROMPT_TEXT_COLOR)(paddedContent);
@@ -291,33 +293,125 @@ export function buildHomeScreenLayout(
 }
 
 /**
+ * Build help text as a string (for displaying in chat area).
+ */
+export function buildHelpText(): string {
+  const lines: string[] = [];
+  lines.push(chalk.bold("SMASK - Chat with LLMs from your terminal"));
+  lines.push("");
+  lines.push(chalk.bold("Usage:"));
+  lines.push(
+    "  " + brand("smask") + "                    Start interactive chat"
+  );
+  lines.push(
+    "  " + brand("smask <question>") + "         Ask a question directly"
+  );
+  lines.push(
+    "  " + brand("smask config") + "             Manage configuration"
+  );
+  lines.push("");
+  lines.push(chalk.bold("Chat Commands:"));
+  lines.push("  " + brand("/help") + "                    Show this help");
+  lines.push("  " + brand("/settings") + "                Open settings menu");
+  lines.push(
+    "  " +
+      brand("/clear") +
+      " or " +
+      brand("/new") +
+      "           Start a new conversation"
+  );
+  lines.push(
+    "  " + brand("/status") + "                  Show configuration status"
+  );
+  lines.push("  " + brand("/exit") + "                    Exit SMASK");
+  lines.push("");
+  lines.push(chalk.bold("Navigation:"));
+  lines.push("  " + chalk.gray("Enter") + "                    Send message");
+  lines.push("  " + chalk.gray("Esc") + "                      Open menu");
+  lines.push(
+    "  " + chalk.gray("j/k or ↑/↓") + "               Navigate menu items"
+  );
+  lines.push("");
+  lines.push(chalk.bold("Tips:"));
+  lines.push("  • Conversations maintain context - ask follow-up questions!");
+  lines.push(
+    "  • Use " + brand("/clear") + " to start fresh when changing topics"
+  );
+  return lines.join("\n");
+}
+
+/**
  * Display help information.
  */
 export function displayHelp(): void {
   console.log();
-  console.log(chalk.bold("SMASK - Chat with LLMs from your terminal"));
+  console.log(buildHelpText());
   console.log();
-  console.log(chalk.bold("Usage:"));
-  console.log("  " + brand("smask") + "                    Start interactive chat");
-  console.log("  " + brand("smask <question>") + "         Ask a question directly");
-  console.log("  " + brand("smask config") + "             Manage configuration");
-  console.log();
-  console.log(chalk.bold("Chat Commands:"));
-  console.log("  " + brand("/help") + "                    Show this help");
-  console.log("  " + brand("/settings") + "                Open settings menu");
-  console.log("  " + brand("/clear") + " or " + brand("/new") + "           Start a new conversation");
-  console.log("  " + brand("/status") + "                  Show configuration status");
-  console.log("  " + brand("/exit") + "                    Exit SMASK");
-  console.log();
-  console.log(chalk.bold("Navigation:"));
-  console.log("  " + chalk.gray("Enter") + "                    Send message");
-  console.log("  " + chalk.gray("Esc") + "                      Open menu");
-  console.log("  " + chalk.gray("j/k or ↑/↓") + "               Navigate menu items");
-  console.log();
-  console.log(chalk.bold("Tips:"));
-  console.log("  • Conversations maintain context - ask follow-up questions!");
-  console.log("  • Use " + brand("/clear") + " to start fresh when changing topics");
-  console.log();
+}
+
+/**
+ * Render a command message - just plain text, no design.
+ * Shows commands like ">/help" as simple text.
+ */
+export function renderCommandMessage(content: string): string {
+  // Just return the content as plain text with ">" prefix
+  // If it already starts with "/", add ">" prefix; otherwise return as-is
+  if (content.startsWith("/")) {
+    return `> ${content}`;
+  }
+  return content;
+}
+
+/**
+ * Render a system message (plain text, no bubble styling).
+ * Used for help output, status, etc. positioned in the chat area.
+ */
+export function renderSystemMessage(content: string): string {
+  // Just return the content as-is with some left padding for alignment
+  const lines = content.split("\n");
+  return lines.map((line) => "  " + line).join("\n");
+}
+
+/**
+ * Display configuration status.
+ */
+/**
+ * Build configuration status text as a string.
+ */
+export function buildStatusText(): string {
+  const lines: string[] = [];
+  lines.push(chalk.bold("Configuration Status:"));
+  lines.push("");
+
+  // Gemini status
+  const geminiKey = isGeminiConfigured();
+
+  if (geminiKey) {
+    lines.push(
+      chalk.green("  ✓ ") + "Gemini: " + chalk.green("API key configured")
+    );
+  } else {
+    lines.push(
+      chalk.yellow("  ○ ") + "Gemini: " + chalk.yellow("Not configured")
+    );
+    lines.push(
+      chalk.gray(
+        "      Get your free API key at: https://aistudio.google.com/apikey"
+      )
+    );
+  }
+
+  // Default model
+  const defaultModel = getDefaultModel();
+  if (defaultModel) {
+    lines.push(chalk.green("  ✓ ") + "Default model: " + brand(defaultModel));
+  } else {
+    lines.push(
+      chalk.gray("  ○ ") + "Default model: " + chalk.gray("gemini (default)")
+    );
+  }
+
+  return lines.join("\n");
 }
 
 /**
@@ -325,27 +419,7 @@ export function displayHelp(): void {
  */
 export function displayConfigStatus(): void {
   console.log();
-  console.log(chalk.bold("Configuration Status:"));
-  console.log();
-  
-  // Gemini status
-  const geminiKey = isGeminiConfigured();
-  
-  if (geminiKey) {
-    console.log(chalk.green("  ✓ ") + "Gemini: " + chalk.green("API key configured"));
-  } else {
-    console.log(chalk.yellow("  ○ ") + "Gemini: " + chalk.yellow("Not configured"));
-    console.log(chalk.gray("      Get your free API key at: https://aistudio.google.com/apikey"));
-  }
-  
-  // Default model
-  const defaultModel = getDefaultModel();
-  if (defaultModel) {
-    console.log(chalk.green("  ✓ ") + "Default model: " + brand(defaultModel));
-  } else {
-    console.log(chalk.gray("  ○ ") + "Default model: " + chalk.gray("gemini (default)"));
-  }
-  
+  console.log(buildStatusText());
   console.log();
 }
 
@@ -369,12 +443,12 @@ export function displayBox(text: string, title?: string): void {
   const lines = text.split("\n");
   const maxLength = Math.max(...lines.map((l) => l.length), title?.length ?? 0);
   const width = maxLength + 4;
-  
+
   const top = title
     ? `╭─ ${chalk.bold(title)} ${"─".repeat(width - title.length - 5)}╮`
     : `╭${"─".repeat(width - 2)}╮`;
   const bottom = `╰${"─".repeat(width - 2)}╯`;
-  
+
   console.log(chalk.gray(top));
   for (const line of lines) {
     const padding = " ".repeat(maxLength - line.length);
@@ -410,11 +484,12 @@ function renderToken(token: any, renderer: any): string {
         chalk.hex("#ffcc33").bold, // h1 - bright gold
         chalk.hex("#ff9f1c").bold, // h2 - orange gold
         chalk.hex("#feba17").bold, // h3 - brand gold
-        chalk.hex("#f77f00"),      // h4 - deep orange
-        chalk.hex("#ff6b35"),      // h5 - coral
-        chalk.hex("#e85d04"),      // h6 - burnt orange
+        chalk.hex("#f77f00"), // h4 - deep orange
+        chalk.hex("#ff6b35"), // h5 - coral
+        chalk.hex("#e85d04"), // h6 - burnt orange
       ];
-      const style = colors[Math.min(level - 1, colors.length - 1)] ?? chalk.bold;
+      const style =
+        colors[Math.min(level - 1, colors.length - 1)] ?? chalk.bold;
       return style(text) + "\n";
     }
     case "strong": {
@@ -434,15 +509,17 @@ function renderToken(token: any, renderer: any): string {
       const maxLineLength = Math.max(...lines.map((l: string) => l.length), 0);
       const padding = 2;
       const width = maxLineLength + padding * 2;
-      
+
       const top = chalk.bgHex(bgColor).hex(textColor)(" ".repeat(width));
       const bottom = chalk.bgHex(bgColor).hex(textColor)(" ".repeat(width));
-      
+
       const codeLines = lines.map((line: string) => {
         const padded = line.padEnd(maxLineLength, " ");
-        return chalk.bgHex(bgColor).hex(textColor)(`${" ".repeat(padding)}${padded}${" ".repeat(padding)}`);
+        return chalk.bgHex(bgColor).hex(textColor)(
+          `${" ".repeat(padding)}${padded}${" ".repeat(padding)}`
+        );
       });
-      
+
       return "\n" + top + "\n" + codeLines.join("\n") + "\n" + bottom + "\n";
     }
     case "codespan": {
@@ -457,7 +534,9 @@ function renderToken(token: any, renderer: any): string {
       return chalk.hex("#4a9eff").underline(linkText);
     }
     case "list": {
-      const items = (token.items || []).map((item: any) => renderToken(item, renderer)).join("");
+      const items = (token.items || [])
+        .map((item: any) => renderToken(item, renderer))
+        .join("");
       return items + "\n";
     }
     case "list_item": {
@@ -469,7 +548,11 @@ function renderToken(token: any, renderer: any): string {
       const text = renderer(token.tokens || []);
       const lines = text.split("\n").filter((l: string) => l.trim());
       // Use a more subtle gray for blockquotes
-      return lines.map((line: string) => chalk.hex("#666").italic(`  │ ${line}`)).join("\n") + "\n";
+      return (
+        lines
+          .map((line: string) => chalk.hex("#666").italic(`  │ ${line}`))
+          .join("\n") + "\n"
+      );
     }
     case "hr": {
       const width = Math.min(getTerminalWidth() - 4, 60);
@@ -515,10 +598,10 @@ function renderMarkdown(markdown: string): string {
       breaks: true,
       gfm: true,
     });
-    
+
     // Parse markdown to tokens
     const tokens = marked.lexer(markdown);
-    
+
     // Render tokens recursively
     const renderer = (tokenList: any[]): string => {
       if (!tokenList || tokenList.length === 0) {
@@ -526,11 +609,11 @@ function renderMarkdown(markdown: string): string {
       }
       return tokenList.map((token) => renderToken(token, renderer)).join("");
     };
-    
+
     const result = renderer(tokens);
     // Remove trailing newlines but preserve structure
     let cleaned = result.trimEnd();
-    
+
     // Post-process to catch any unparsed markdown syntax
     // This handles cases where markdown syntax might not have been tokenized correctly
     // First handle bold (**text**)
@@ -541,16 +624,19 @@ function renderMarkdown(markdown: string): string {
       }
       return match;
     });
-    
+
     // Then handle italic (*text*) - but avoid matching **text**
     // We'll match single asterisks that aren't part of double asterisks
-    cleaned = cleaned.replace(/(^|[^*])\*([^*\n]+?)\*([^*]|$)/g, (match, before, text, after) => {
-      if (!match.includes("\x1B[")) {
-        return (before || "") + chalk.italic(text) + (after || "");
+    cleaned = cleaned.replace(
+      /(^|[^*])\*([^*\n]+?)\*([^*]|$)/g,
+      (match, before, text, after) => {
+        if (!match.includes("\x1B[")) {
+          return (before || "") + chalk.italic(text) + (after || "");
+        }
+        return match;
       }
-      return match;
-    });
-    
+    );
+
     return cleaned;
   } catch (error) {
     // If markdown parsing fails, try to clean up common markdown artifacts
@@ -559,9 +645,12 @@ function renderMarkdown(markdown: string): string {
       return chalk.whiteBright.bold(text);
     });
     // Remove literal * markers for italic (but not if it's part of **)
-    cleaned = cleaned.replace(/(^|[^*])\*([^*\n]+?)\*([^*]|$)/g, (match, before, text, after) => {
-      return (before || "") + chalk.italic(text) + (after || "");
-    });
+    cleaned = cleaned.replace(
+      /(^|[^*])\*([^*\n]+?)\*([^*]|$)/g,
+      (match, before, text, after) => {
+        return (before || "") + chalk.italic(text) + (after || "");
+      }
+    );
     // Remove literal backticks for inline code
     cleaned = cleaned.replace(/`([^`]+)`/g, (match, code) => {
       return chalk.bgHex("#3a3a3a").hex("#f8f8f2")(` ${code} `);
@@ -576,29 +665,29 @@ function renderMarkdown(markdown: string): string {
 function wordWrap(text: string, maxWidth: number): string[] {
   const lines: string[] = [];
   const paragraphs = text.split("\n");
-  
+
   for (const paragraph of paragraphs) {
     if (paragraph.length === 0) {
       lines.push("");
       continue;
     }
-    
+
     // Split by words, but preserve ANSI codes
     const words: string[] = [];
     let currentWord = "";
     let inAnsi = false;
-    
+
     for (let i = 0; i < paragraph.length; i++) {
       const char = paragraph[i]!;
       currentWord += char;
-      
+
       // Check for ANSI escape sequences
       if (char === "\x1B") {
         inAnsi = true;
       } else if (inAnsi && /[a-zA-Z]/.test(char)) {
         inAnsi = false;
       }
-      
+
       // If we hit a space and we're not in an ANSI sequence, split
       if (char === " " && !inAnsi) {
         if (currentWord.trim()) {
@@ -610,13 +699,13 @@ function wordWrap(text: string, maxWidth: number): string[] {
     if (currentWord.trim()) {
       words.push(currentWord);
     }
-    
+
     let currentLine = "";
-    
+
     for (const word of words) {
       const wordLength = visibleLength(word);
       const currentLength = visibleLength(currentLine);
-      
+
       if (currentLength === 0) {
         currentLine = word;
       } else if (currentLength + 1 + wordLength <= maxWidth) {
@@ -626,12 +715,12 @@ function wordWrap(text: string, maxWidth: number): string[] {
         currentLine = word;
       }
     }
-    
+
     if (currentLine.length > 0) {
       lines.push(currentLine);
     }
   }
-  
+
   return lines;
 }
 
@@ -642,29 +731,31 @@ export function renderUserMessage(content: string): string {
   const terminalWidth = getTerminalWidth();
   const maxBubbleWidth = Math.min(Math.floor(terminalWidth * 0.75), 70);
   const innerWidth = maxBubbleWidth - 4;
-  
+
   const wrappedLines = wordWrap(content, innerWidth);
-  const bubbleWidth = Math.max(...wrappedLines.map(l => l.length), 10) + 4;
+  const bubbleWidth = Math.max(...wrappedLines.map((l) => l.length), 10) + 4;
   const indent = Math.max(terminalWidth - bubbleWidth - 2, 0);
   const spacer = " ".repeat(indent);
-  
+
   const lines: string[] = [];
   const userLabel = chalk.hex(USER_COLOR).bold("You");
   lines.push(spacer + userLabel);
-  
+
   const border = chalk.hex(USER_COLOR);
   const horizontal = bubbleWidth - 2;
-  
+
   lines.push(spacer + border(`╭${"─".repeat(horizontal)}╮`));
-  
+
   for (const line of wrappedLines) {
     const padding = " ".repeat(bubbleWidth - 4 - line.length);
-    const styledContent = chalk.bgHex(USER_BG).hex("#ffffff")(` ${line}${padding} `);
+    const styledContent = chalk.bgHex(USER_BG).hex("#ffffff")(
+      ` ${line}${padding} `
+    );
     lines.push(spacer + border("│") + styledContent + border("│"));
   }
-  
+
   lines.push(spacer + border(`╰${"─".repeat(horizontal)}╯`));
-  
+
   return lines.join("\n");
 }
 
@@ -675,20 +766,20 @@ export function renderAssistantMessage(content: string): string {
   const terminalWidth = getTerminalWidth();
   const maxBubbleWidth = Math.min(Math.floor(terminalWidth * 0.85), 80);
   const innerWidth = maxBubbleWidth - 4;
-  
+
   // Render markdown to styled text
   const markdownRendered = renderMarkdown(content);
-  
+
   // Split into lines and wrap each paragraph
   const paragraphs = markdownRendered.split("\n\n");
   const allLines: string[] = [];
-  
+
   for (const paragraph of paragraphs) {
     if (paragraph.trim() === "") {
       allLines.push("");
       continue;
     }
-    
+
     // Split paragraph into lines (preserving existing line breaks from markdown)
     const paragraphLines = paragraph.split("\n");
     for (const line of paragraphLines) {
@@ -705,30 +796,35 @@ export function renderAssistantMessage(content: string): string {
       allLines.push("");
     }
   }
-  
+
   // Calculate bubble width based on visible length (ignoring ANSI codes)
-  const maxVisibleWidth = Math.max(...allLines.map(l => visibleLength(l)), 10);
+  const maxVisibleWidth = Math.max(
+    ...allLines.map((l) => visibleLength(l)),
+    10
+  );
   const bubbleWidth = maxVisibleWidth + 4;
-  
+
   const lines: string[] = [];
   const assistantLabel = brand.bold("✦ SMASK");
   lines.push(assistantLabel);
-  
+
   const border = chalk.hex(ASSISTANT_COLOR);
   const horizontal = Math.min(bubbleWidth - 2, maxBubbleWidth - 2);
-  
+
   lines.push(border(`╭${"─".repeat(horizontal)}╮`));
-  
+
   for (const line of allLines) {
     const visibleLen = visibleLength(line);
     const padding = Math.max(0, bubbleWidth - 4 - visibleLen);
     const paddingStr = " ".repeat(padding);
-    const styledContent = chalk.bgHex(ASSISTANT_BG).hex("#fff4d6")(` ${line}${paddingStr} `);
+    const styledContent = chalk.bgHex(ASSISTANT_BG).hex("#fff4d6")(
+      ` ${line}${paddingStr} `
+    );
     lines.push(border("│") + styledContent + border("│"));
   }
-  
+
   lines.push(border(`╰${"─".repeat(horizontal)}╯`));
-  
+
   return lines.join("\n");
 }
 
@@ -739,7 +835,7 @@ export function renderChatHistory(messages: ChatMessage[]): string {
   if (messages.length === 0) {
     return "";
   }
-  
+
   const renderedMessages = messages.map((msg) => {
     if (msg.role === "user") {
       return renderUserMessage(msg.content);
@@ -747,7 +843,7 @@ export function renderChatHistory(messages: ChatMessage[]): string {
       return renderAssistantMessage(msg.content);
     }
   });
-  
+
   return renderedMessages.join("\n\n");
 }
 
@@ -759,12 +855,14 @@ export function buildChatScreenLayout(
   inputText?: string
 ): string {
   const sections: string[] = [];
-  
+
   // Compact header
-  const header = brand("─── SMASK Chat ") + chalk.gray("─".repeat(Math.max(getTerminalWidth() - 16, 10)));
+  const header =
+    brand("─── SMASK Chat ") +
+    chalk.gray("─".repeat(Math.max(getTerminalWidth() - 16, 10)));
   sections.push(header);
   sections.push("");
-  
+
   // Chat history
   if (messages.length > 0) {
     sections.push(renderChatHistory(messages));
@@ -774,15 +872,15 @@ export function buildChatScreenLayout(
     sections.push(chalk.gray("  Start a conversation by typing below..."));
     sections.push("");
   }
-  
+
   // Input prompt
   sections.push(...buildPromptBoxLines(inputText));
-  
+
   // Status bar
   sections.push("");
   sections.push(buildStatusLine());
   sections.push(chalk.gray("  Esc: menu • /clear: new chat • /help: commands"));
-  
+
   return sections.join("\n");
 }
 
@@ -796,7 +894,10 @@ export function displayStreamingStart(): void {
   const maxBubbleWidth = Math.min(Math.floor(terminalWidth * 0.85), 80);
   const horizontal = maxBubbleWidth - 2;
   console.log(chalk.hex(ASSISTANT_COLOR)(`╭${"─".repeat(horizontal)}╮`));
-  process.stdout.write(chalk.hex(ASSISTANT_COLOR)("│") + chalk.bgHex(ASSISTANT_BG).hex("#fff4d6")(" "));
+  process.stdout.write(
+    chalk.hex(ASSISTANT_COLOR)("│") +
+      chalk.bgHex(ASSISTANT_BG).hex("#fff4d6")(" ")
+  );
 }
 
 /**
@@ -816,7 +917,3 @@ export function displayStreamingEnd(): void {
   const horizontal = maxBubbleWidth - 2;
   console.log(chalk.hex(ASSISTANT_COLOR)(`╰${"─".repeat(horizontal)}╯`));
 }
-
-
-
-
