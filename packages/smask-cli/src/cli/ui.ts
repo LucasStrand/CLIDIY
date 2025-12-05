@@ -146,14 +146,51 @@ export function buildPromptBoxLines(content?: string): string[] {
   const contentWidth = Math.max(innerWidth - 1, 1);
   const placeholderWidth = Math.max(contentWidth - 1, 1);
   const trimmedPlaceholder = truncateText(placeholder, placeholderWidth);
-  const paddedContent = ` ${trimmedPlaceholder}`.padEnd(contentWidth, " ");
+
+  // Check if content contains cursor character and style it differently for visibility
+  const cursorChar = "▋";
+  const hasCursor = trimmedPlaceholder.includes(cursorChar);
+
+  let textSegment: string;
+
+  if (hasCursor) {
+    // Split content around cursor and style each part separately
+    const parts = trimmedPlaceholder.split(cursorChar);
+    const beforeCursor = parts[0] ?? "";
+    const afterCursor = parts[1] ?? "";
+
+    // Style the cursor with inverted colors for high visibility
+    const cursorStyled = chalk
+      .bgHex(PROMPT_TEXT_COLOR)
+      .hex(PROMPT_BACKGROUND_COLOR)(cursorChar);
+    // Style text parts normally
+    const beforeStyled = chalk
+      .bgHex(PROMPT_BACKGROUND_COLOR)
+      .hex(PROMPT_TEXT_COLOR)(beforeCursor);
+    const afterStyled = chalk
+      .bgHex(PROMPT_BACKGROUND_COLOR)
+      .hex(PROMPT_TEXT_COLOR)(afterCursor);
+
+    // Combine: space + before + cursor + after + padding
+    const combined = ` ${beforeStyled}${cursorStyled}${afterStyled}`;
+    // Calculate padding needed (accounting for visible length, not ANSI codes)
+    const visibleLength =
+      1 + beforeCursor.length + cursorChar.length + afterCursor.length;
+    const paddingNeeded = Math.max(0, contentWidth - visibleLength);
+    const padding = " ".repeat(paddingNeeded);
+    textSegment = combined + padding;
+  } else {
+    // No cursor - style normally
+    const paddedContent = ` ${trimmedPlaceholder}`.padEnd(contentWidth, " ");
+    textSegment = chalk.bgHex(PROMPT_BACKGROUND_COLOR).hex(PROMPT_TEXT_COLOR)(
+      paddedContent
+    );
+  }
+
   const border = chalk.hex(PROMPT_BORDER_COLOR);
   const arrowSegment = chalk.bgHex(PROMPT_BACKGROUND_COLOR).hex(BRAND_COLOR)(
     ">"
   );
-  const textSegment = chalk
-    .bgHex(PROMPT_BACKGROUND_COLOR)
-    .hex(PROMPT_TEXT_COLOR)(paddedContent);
   const horizontal = Math.max(width - 2, 2);
 
   return [
@@ -510,9 +547,6 @@ function renderToken(token: any, renderer: any): string {
       const padding = 2;
       const width = maxLineLength + padding * 2;
 
-      const top = chalk.bgHex(bgColor).hex(textColor)(" ".repeat(width));
-      const bottom = chalk.bgHex(bgColor).hex(textColor)(" ".repeat(width));
-
       const codeLines = lines.map((line: string) => {
         const padded = line.padEnd(maxLineLength, " ");
         return chalk.bgHex(bgColor).hex(textColor)(
@@ -520,7 +554,7 @@ function renderToken(token: any, renderer: any): string {
         );
       });
 
-      return "\n" + top + "\n" + codeLines.join("\n") + "\n" + bottom + "\n";
+      return "\n" + codeLines.join("\n") + "\n";
     }
     case "codespan": {
       const code = token.text || "";

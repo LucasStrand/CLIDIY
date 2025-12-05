@@ -23,7 +23,6 @@ import {
   buildStatusLine,
   renderLogoBlock,
   renderTipsBlock,
-  renderChatHistory,
 } from "./ui.js";
 import {
   getDefaultModel,
@@ -143,6 +142,7 @@ async function selectVim<T>(opts: {
       // Handle Ctrl+C
       if (key?.ctrl && key?.name === "c") {
         cleanup();
+        process.stdout.write("\x1B[?1049l"); // Exit alternate screen
         process.stdout.write("\n");
         process.exit(0);
       }
@@ -264,75 +264,99 @@ function buildSlashCommandHints(input: string): string[] {
   return lines;
 }
 
-/**
- * Render the full screen with chat history and input box.
- */
+function splitLines(block: string): string[] {
+  return block.split("\n");
+}
+
+function buildChatLines(messages: ChatMessage[]): string[] {
+  const lines: string[] = [];
+  lines.push(...splitLines(renderLogoBlock()));
+  lines.push(...splitLines(renderTipsBlock()));
+  lines.push("");
+
+  if (messages.length > 0) {
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i]!;
+      if (msg.role === "user") {
+        lines.push(renderUserMessage(msg.content));
+      } else if (msg.role === "assistant") {
+        lines.push(renderAssistantMessage(msg.content));
+      } else if (msg.role === "command") {
+        lines.push(renderCommandMessage(msg.content));
+      } else if (msg.role === "system") {
+        lines.push(renderSystemMessage(msg.content));
+      }
+      if (i < messages.length - 1) {
+        lines.push("");
+      }
+    }
+    lines.push("");
+  } else {
+    lines.push(chalk.gray("  Start a conversation by typing below..."));
+    lines.push("");
+  }
+
+  return lines;
+}
+
+function buildPromptAreaLines(inputText: string): string[] {
+  const textWithoutCursor = inputText.replace(/▋/g, "");
+  const isEmpty = textWithoutCursor.length === 0;
+  const lines: string[] = [];
+
+  lines.push(...buildPromptBoxLines(isEmpty ? undefined : inputText));
+  lines.push("");
+  lines.push(buildStatusLine());
+  lines.push(chalk.gray("  Esc: menu • /clear: new chat • /help: commands"));
+
+  if (textWithoutCursor.startsWith("/")) {
+    const hints = buildSlashCommandHints(textWithoutCursor);
+    if (hints.length > 0) {
+      lines.push(...hints);
+    }
+  }
+
+  return lines;
+}
+
 function renderChatScreen(
   messages: ChatMessage[],
   inputText: string,
   hasModel: boolean,
   choices: Choice<MainMenuAction>[]
 ): void {
-  // Clear screen and reset cursor.
-  // On the very first render we clear everything (including scrollback) to get
-  // a clean canvas. For subsequent renders while typing, we avoid the heavy
-  // full-screen+scrollback clear to reduce visible flicker.
-  if (!hasShownHomeScreen || !hasActivePromptBox) {
-    // Initial render – do a full clear
-    process.stdout.write("\x1B[2J"); // Clear entire screen
-    process.stdout.write("\x1B[H");  // Move cursor to top-left (row 1, column 1)
-    process.stdout.write("\x1B[3J"); // Clear scrollback buffer
+  const rows = process.stdout.rows ?? 24;
+  const chatLines = buildChatLines(messages);
+  const promptAreaLines = buildPromptAreaLines(inputText);
+  const promptHeight = promptAreaLines.length;
+
+  // Calculate layout
+  const totalHeight = chatLines.length + promptHeight;
+  const fitsWithoutScrolling = totalHeight <= rows;
+  let visibleChatLines: string[];
+
+  if (fitsWithoutScrolling) {
+    visibleChatLines = chatLines;
   } else {
-    // Subsequent renders – just reset to top and clear downwards
-    process.stdout.write("\x1B[H");  // Move cursor to top-left
-    process.stdout.write("\x1B[0J"); // Clear from cursor to end
+    const chatDisplayRows = Math.max(rows - promptHeight, 1);
+    visibleChatLines = chatLines.slice(-chatDisplayRows);
+  }
+
+  const isInitialRender = !hasShownHomeScreen || !hasActivePromptBox;
+  
+  if (isInitialRender) {
+    // Initial render - clear everything including scrollback
+    process.stdout.write("\x1B[2J");  // Clear entire screen
+    process.stdout.write("\x1B[H");   // Move to top-left
+    process.stdout.write("\x1B[3J");  // Clear scrollback
+  } else {
+    // Subsequent renders - just move to top and clear visible area
+    process.stdout.write("\x1B[H");   // Move to top-left
+    process.stdout.write("\x1B[0J");  // Clear from cursor to end (preserves scrollback)
   }
   
-  // Build the entire screen content as a single string to avoid partial writes
-  const sections: string[] = [];
-  
-  // Always show logo and tips at the top
-  sections.push(renderLogoBlock());
-  sections.push(renderTipsBlock());
-  
-  if (messages.length > 0) {
-    // Show chat messages below tips
-    sections.push("");
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i]!;
-      if (msg.role === "user") {
-        sections.push(renderUserMessage(msg.content));
-      } else if (msg.role === "assistant") {
-        sections.push(renderAssistantMessage(msg.content));
-      } else if (msg.role === "command") {
-        // Command messages render on the left with distinct styling
-        sections.push(renderCommandMessage(msg.content));
-      } else if (msg.role === "system") {
-        // System messages render as plain text (no bubble)
-        sections.push(renderSystemMessage(msg.content));
-      }
-      if (i < messages.length - 1) {
-        sections.push("");
-      }
-    }
-    sections.push("");
-  }
-  
-  // Input box (always at bottom)
-  // Strip cursor character to check if there's actual content
-  // If inputText is empty or only contains the cursor character, show placeholder
-  const textWithoutCursor = inputText.replace(/▋/g, "");
-  const isEmpty = textWithoutCursor.length === 0;
-  const promptLines = buildPromptBoxLines(isEmpty ? undefined : inputText);
-  sections.push(...promptLines);
-  
-  // Status bar
-  sections.push("");
-  sections.push(buildStatusLine());
-  sections.push(chalk.gray("  Esc: menu • /clear: new chat • /help: commands"));
-  
-  // Write everything at once
-  process.stdout.write(sections.join("\n"));
+  const fullScreenLines = [...visibleChatLines, ...promptAreaLines];
+  process.stdout.write(fullScreenLines.join("\n"));
 }
 
 async function captureChatInput(
@@ -349,6 +373,11 @@ async function captureChatInput(
   let isInitialRender = true;
 
   const render = () => {
+    if (!cursorHidden) {
+      process.stdout.write(hide);
+      cursorHidden = true;
+    }
+
     // Show a visual cursor at the current cursor position.
     // We use a block character so it's clearly visible inside the prompt box.
     const cursorChar = "▋";
@@ -356,50 +385,9 @@ async function captureChatInput(
     const after = text.slice(cursorPos);
     const displayText = before + cursorChar + after;
 
-    // Always do a full re-render to avoid cursor position issues
-    // This is more reliable than trying to update in place
+    // Render the screen
     renderChatScreen(chatHistory, displayText, hasModel, choices);
 
-    // Calculate cursor position in the prompt box
-    // The prompt box is always at the bottom, after logo, tips, and chat history
-    const logoLines = renderLogoBlock().split("\n").length;
-    const tipsLines = renderTipsBlock().split("\n").length;
-    const chatHistoryLines = chatHistory.length > 0 
-      ? renderChatHistory(chatHistory).split("\n").length + 1 // +1 for spacing
-      : 0;
-    
-    // Prompt box structure: top border (1 line) + content line (1 line) + bottom border (1 line)
-    // Cursor is on the content line (middle line)
-    const linesAbovePrompt = logoLines + tipsLines + chatHistoryLines;
-    const promptBoxTopLine = linesAbovePrompt + 1; // +1 for top border
-    const cursorLine = promptBoxTopLine + 1; // Middle line of prompt box
-    
-    // Calculate column: border "│ " (2 chars) + ">" (1 char) + space (1 char) + text before cursor + cursor char
-    // Account for ANSI codes in the text - they don't take visual space
-    const textBeforeCursor = before;
-    const visibleTextBeforeCursor = textBeforeCursor.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "").length;
-    // Position cursor right after the visual cursor character
-    const cursorColumn = 2 + 1 + 1 + visibleTextBeforeCursor + 1; // border(2) + ">"(1) + space(1) + text + cursor char(1)
-    
-    // Position cursor and show it (make it visible)
-    process.stdout.write(`\x1B[${cursorLine};${cursorColumn}H`);
-    process.stdout.write(show);
-    cursorHidden = false;
-
-    // If the user is typing a slash command, show matching commands
-    if (text.startsWith("/")) {
-      const hints = buildSlashCommandHints(text);
-      if (hints.length > 0) {
-        process.stdout.write("\n");
-        for (const line of hints) {
-          process.stdout.write(line + "\n");
-        }
-        // Reposition cursor back to input box after showing hints
-        process.stdout.write(`\x1B[${cursorLine};${cursorColumn}H`);
-        process.stdout.write(show);
-      }
-    }
-    
     if (isInitialRender) {
       isInitialRender = false;
       hasShownHomeScreen = true;
@@ -444,6 +432,7 @@ async function captureChatInput(
     const onKey = (str: string | undefined, key: readline.Key | undefined) => {
       if (key?.ctrl && key?.name === "c") {
         cleanup();
+        process.stdout.write("\x1B[?1049l"); // Exit alternate screen
         process.stdout.write("\n");
         process.exit(0);
       }
@@ -522,6 +511,11 @@ async function captureChatInput(
  * Run the main interactive menu.
  */
 export async function runInteractiveMenu(): Promise<void> {
+  // Enter alternate screen buffer - this is the standard way to avoid
+  // polluting terminal scrollback. You can still scroll within the app
+  // to see chat history, you just won't see what was in terminal before.
+  process.stdout.write("\x1B[?1049h");
+  
   let exit = false;
   // Reset chat history on start
   chatHistory = [];
@@ -581,6 +575,8 @@ export async function runInteractiveMenu(): Promise<void> {
     }
   }
 
+  // Exit alternate screen buffer before saying goodbye
+  process.stdout.write("\x1B[?1049l");
   console.log(chalk.gray("\nGoodbye! 👋\n"));
   process.exit(0);
 }
@@ -868,6 +864,7 @@ function waitForEnter(): Promise<void> {
     const onKey = (str: string | undefined, key: readline.Key | undefined) => {
       if (key?.ctrl && key?.name === "c") {
         cleanup();
+        process.stdout.write("\x1B[?1049l"); // Exit alternate screen
         process.stdout.write("\n");
         process.exit(0);
       }
@@ -913,6 +910,7 @@ async function handleCommand(command: string, choices: Choice<MainMenuAction>[])
       break;
     case "/exit":
     case "/quit":
+      process.stdout.write("\x1B[?1049l"); // Exit alternate screen
       process.exit(0);
     case "/status":
       // Add status text to chat history as a system message
