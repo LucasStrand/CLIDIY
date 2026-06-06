@@ -3,18 +3,20 @@
 Find the folders sitting at a location (the current directory by default, or a
 path you give it) and add each one to GitHub as its own repository.
 
-For every folder it finds, the tool will:
+It only adds folders that **aren't on GitHub yet**. A folder that is already its
+own git repo with the target remote (`origin` by default) is reported as
+"already on GitHub" and left completely alone — it is never re-committed or
+re-pushed.
+
+For each folder that *does* need adding, the tool will:
 
 1. Initialise a git repo (`git init`) if the folder isn't one already.
-2. Stage and commit any pending changes (this also creates the first commit).
+2. Stage and commit its contents (the initial commit).
 3. Create a GitHub repository and push, using the [GitHub CLI](https://cli.github.com).
 
-If a folder already has the target remote configured, it commits any pending
-changes and pushes to it.
-
-It goes through the folders one at a time, showing each project's README and
+It goes through the candidates one at a time, showing each project's README and
 asking before it creates the repo. Pass `--yes` to skip the prompts and add them
-all, or `--dry-run` to just see the list.
+all, or `--dry-run` to just see the plan. Empty folders are skipped.
 
 ## Requirements
 

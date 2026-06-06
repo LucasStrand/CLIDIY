@@ -39,8 +39,21 @@ function commandExists(cmd: string): boolean {
   return run(cmd, ["--version"]).code === 0;
 }
 
-function isGitRepo(dir: string): boolean {
-  return run("git", ["rev-parse", "--is-inside-work-tree"], dir).stdout === "true";
+/** Compare two filesystem paths, case-insensitively on Windows. */
+function samePath(a: string, b: string): boolean {
+  const x = path.resolve(a);
+  const y = path.resolve(b);
+  return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
+}
+
+/**
+ * True only when `dir` is the ROOT of its own git repo. `git rev-parse` walks
+ * upward, so a plain folder sitting inside another repo would otherwise look
+ * like a repo — we compare the toplevel to `dir` to avoid that.
+ */
+function isOwnGitRoot(dir: string): boolean {
+  const res = run("git", ["rev-parse", "--show-toplevel"], dir);
+  return res.code === 0 && res.stdout ? samePath(res.stdout, dir) : false;
 }
 
 function hasCommits(dir: string): boolean {
@@ -104,21 +117,45 @@ interface Options {
   yes: boolean;
 }
 
-type FolderStatus = "created" | "pushed" | "skipped" | "failed";
+type FolderStatus = "created" | "skipped" | "failed";
 
-function pushToGitHub(
+type PlanAction = "create" | "on-github" | "empty";
+
+interface PlannedFolder {
+  name: string;
+  folder: string;
+  action: PlanAction;
+  /** Existing remote URL, when the folder is already on GitHub. */
+  remoteUrl?: string;
+}
+
+/**
+ * Decide what to do with a folder WITHOUT changing anything. A folder that is
+ * already its own git repo with the target remote is treated as already on
+ * GitHub and left completely alone.
+ */
+function planFolder(folder: string, name: string, opts: Options): PlannedFolder {
+  if (isEmptyDir(folder)) return { name, folder, action: "empty" };
+  if (isOwnGitRoot(folder)) {
+    const remoteUrl = getRemoteUrl(folder, opts.remote);
+    if (remoteUrl) return { name, folder, action: "on-github", remoteUrl };
+  }
+  return { name, folder, action: "create" };
+}
+
+/**
+ * Create a brand-new GitHub repo for a folder and push it. Only ever called for
+ * folders planned as "create" — it never touches a folder already on GitHub.
+ */
+function createRepo(
   folder: string,
   name: string,
   opts: Options
 ): { status: FolderStatus; detail: string } {
   const label = chalk.cyan(name);
 
-  if (isEmptyDir(folder)) {
-    return { status: "skipped", detail: `${label} ${chalk.gray("(empty folder)")}` };
-  }
-
-  // 1. Make sure it's a git repo with at least one commit to push.
-  if (!isGitRepo(folder)) {
+  // Make it a git repo if it isn't one already.
+  if (!isOwnGitRoot(folder)) {
     const init = run("git", ["init", "-b", "main"], folder);
     if (init.code !== 0) {
       // Older git without -b: init then rename the branch.
@@ -127,11 +164,9 @@ function pushToGitHub(
     }
   }
 
-  // Stage and commit any pending changes. This also creates the first commit
-  // for a brand-new repo, so a folder is always fully committed before we push.
+  // Stage and commit so there's something to push.
   run("git", ["add", "-A"], folder);
-  const pending = run("git", ["status", "--porcelain"], folder).stdout;
-  if (pending) {
+  if (run("git", ["status", "--porcelain"], folder).stdout) {
     const commit = run("git", ["commit", "-m", opts.message], folder);
     if (commit.code !== 0 && !hasCommits(folder)) {
       return {
@@ -140,19 +175,8 @@ function pushToGitHub(
       };
     }
   }
-
   if (!hasCommits(folder)) {
     return { status: "skipped", detail: `${label} ${chalk.gray("(nothing to commit)")}` };
-  }
-
-  // 2. If a remote already exists, just push to it. Otherwise create the repo.
-  const existing = getRemoteUrl(folder, opts.remote);
-  if (existing) {
-    const push = run("git", ["push", "-u", opts.remote, "HEAD"], folder);
-    if (push.code !== 0) {
-      return { status: "failed", detail: `${label}: push failed — ${push.stderr || push.stdout}` };
-    }
-    return { status: "pushed", detail: `${label} ${chalk.gray("→ " + existing)}` };
   }
 
   const repoName = opts.org ? `${opts.org}/${name}` : name;
@@ -217,6 +241,13 @@ async function main(): Promise<void> {
         return;
       }
 
+      // Planning calls git, so make sure it exists first.
+      if (!commandExists("git")) {
+        console.error(chalk.red("git is not installed or not on PATH."));
+        process.exitCode = 1;
+        return;
+      }
+
       const folders = findFolders(root, opts.includeHidden);
       console.log(
         `Scanning ${chalk.cyan(root)} — found ${chalk.bold(String(folders.length))} folder${
@@ -225,13 +256,32 @@ async function main(): Promise<void> {
       );
       if (folders.length === 0) return;
 
-      for (const name of folders) console.log(`  ${chalk.gray("•")} ${name}`);
+      // Work out what would happen to each folder before changing anything.
+      const plans = folders.map((name) => planFolder(path.join(root, name), name, opts));
+      const toCreate = plans.filter((p) => p.action === "create");
 
+      for (const p of plans) {
+        if (p.action === "create") {
+          console.log(`  ${chalk.green("+")} ${p.name} ${chalk.gray("(will be added)")}`);
+        } else if (p.action === "on-github") {
+          console.log(
+            `  ${chalk.gray("•")} ${chalk.gray(p.name)} ${chalk.gray("— already on GitHub, left alone")}`
+          );
+        } else {
+          console.log(`  ${chalk.gray("•")} ${chalk.gray(p.name)} ${chalk.gray("— empty, skipped")}`);
+        }
+      }
+
+      const onGitHub = plans.filter((p) => p.action === "on-github").length;
+      const empty = plans.filter((p) => p.action === "empty").length;
       const visibilityLabel = opts.public ? chalk.yellow("public") : chalk.green("private");
       console.log(
-        `\nEach folder will be pushed to GitHub as a ${visibilityLabel} repo` +
+        `\n${chalk.bold(String(toCreate.length))} folder${toCreate.length === 1 ? "" : "s"} would be added as ` +
+          `${visibilityLabel} repo${toCreate.length === 1 ? "" : "s"}` +
           (opts.org ? ` under ${chalk.cyan(opts.org)}` : "") +
-          ` (remote ${chalk.cyan(opts.remote)}).`
+          (onGitHub ? `; ${onGitHub} already on GitHub` : "") +
+          (empty ? `; ${empty} empty` : "") +
+          "."
       );
 
       if (opts.dryRun) {
@@ -239,12 +289,12 @@ async function main(): Promise<void> {
         return;
       }
 
-      // gh is what actually creates repos; fail early with a clear message.
-      if (!commandExists("git")) {
-        console.error(chalk.red("git is not installed or not on PATH."));
-        process.exitCode = 1;
+      if (toCreate.length === 0) {
+        console.log(chalk.gray("\nNothing new to add."));
         return;
       }
+
+      // gh is only needed once we actually have repos to create.
       if (!commandExists("gh")) {
         console.error(
           chalk.red("The GitHub CLI (gh) is required. Install it from https://cli.github.com and run `gh auth login`.")
@@ -260,17 +310,14 @@ async function main(): Promise<void> {
 
       const icons: Record<FolderStatus, string> = {
         created: chalk.green("✓ created"),
-        pushed: chalk.green("✓ pushed"),
         skipped: chalk.yellow("• skipped"),
         failed: chalk.red("✗ failed"),
       };
-      const summary: Record<FolderStatus, number> = { created: 0, pushed: 0, skipped: 0, failed: 0 };
+      const summary: Record<FolderStatus, number> = { created: 0, skipped: 0, failed: 0 };
 
-      // Walk the same folders we listed above, one at a time. For each, show its
+      // Only the folders that aren't already on GitHub. One at a time, show the
       // README and ask before creating anything (unless --yes was given).
-      for (const name of folders) {
-        const folder = path.join(root, name);
-
+      for (const { name, folder } of toCreate) {
         if (!opts.yes) {
           console.log(`\n${chalk.bold(name)} ${chalk.gray(folder)}`);
           const readme = readReadmePreview(folder);
@@ -289,13 +336,13 @@ async function main(): Promise<void> {
           }
         }
 
-        const result = pushToGitHub(folder, name, opts);
+        const result = createRepo(folder, name, opts);
         summary[result.status]++;
         console.log(`  ${icons[result.status]}  ${result.detail}`);
       }
 
       console.log(
-        `\nDone — ${chalk.green(String(summary.created + summary.pushed))} added, ` +
+        `\nDone — ${chalk.green(String(summary.created))} added, ` +
           `${chalk.yellow(String(summary.skipped))} skipped, ${chalk.red(String(summary.failed))} failed.`
       );
       if (summary.failed > 0) process.exitCode = 1;
