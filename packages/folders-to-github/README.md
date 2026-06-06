@@ -12,6 +12,10 @@ For every folder it finds, the tool will:
 If a folder already has the target remote configured, it commits any pending
 changes and pushes to it.
 
+It goes through the folders one at a time, showing each project's README and
+asking before it creates the repo. Pass `--yes` to skip the prompts and add them
+all, or `--dry-run` to just see the list.
+
 ## Requirements
 
 - [`git`](https://git-scm.com)

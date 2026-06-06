@@ -68,6 +68,20 @@ function isEmptyDir(dir: string): boolean {
   return fs.readdirSync(dir).length === 0;
 }
 
+/** First lines of a folder's README, if it has one, so the user can eyeball it. */
+function readReadmePreview(dir: string, maxLines = 15): string | undefined {
+  const candidates = ["README.md", "Readme.md", "readme.md", "README", "README.txt", "readme.txt"];
+  for (const name of candidates) {
+    const file = path.join(dir, name);
+    if (fs.existsSync(file) && fs.statSync(file).isFile()) {
+      const lines = fs.readFileSync(file, "utf8").split(/\r?\n/);
+      const preview = lines.slice(0, maxLines).join("\n");
+      return lines.length > maxLines ? `${preview}\n…` : preview;
+    }
+  }
+  return undefined;
+}
+
 async function confirm(question: string): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
@@ -176,7 +190,7 @@ async function main(): Promise<void> {
     .option("--include-hidden", "Include folders whose names start with a dot", false)
     .option("-m, --message <msg>", "Commit message for the initial commit", "Initial commit")
     .option("-n, --dry-run", "List the folders that would be added, then exit", false)
-    .option("-y, --yes", "Skip the confirmation prompt", false)
+    .option("-y, --yes", "Skip the per-folder confirmation prompts and add them all", false)
     .action(async (pathArg: string | undefined, raw: Record<string, unknown>) => {
       const opts: Options = {
         ...(pathArg !== undefined ? { path: pathArg } : {}),
@@ -244,21 +258,37 @@ async function main(): Promise<void> {
         return;
       }
 
-      if (!opts.yes && !(await confirm(`\nCreate ${folders.length} repositor${folders.length === 1 ? "y" : "ies"} on GitHub?`))) {
-        console.log(chalk.gray("Aborted."));
-        return;
-      }
-
-      console.log("");
+      const icons: Record<FolderStatus, string> = {
+        created: chalk.green("✓ created"),
+        pushed: chalk.green("✓ pushed"),
+        skipped: chalk.yellow("• skipped"),
+        failed: chalk.red("✗ failed"),
+      };
       const summary: Record<FolderStatus, number> = { created: 0, pushed: 0, skipped: 0, failed: 0 };
+
+      // Walk the same folders we listed above, one at a time. For each, show its
+      // README and ask before creating anything (unless --yes was given).
       for (const name of folders) {
         const folder = path.join(root, name);
-        const icons: Record<FolderStatus, string> = {
-          created: chalk.green("✓ created"),
-          pushed: chalk.green("✓ pushed"),
-          skipped: chalk.yellow("• skipped"),
-          failed: chalk.red("✗ failed"),
-        };
+
+        if (!opts.yes) {
+          console.log(`\n${chalk.bold(name)} ${chalk.gray(folder)}`);
+          const readme = readReadmePreview(folder);
+          if (readme) {
+            console.log(chalk.gray("  ┌─ README"));
+            for (const line of readme.split("\n")) console.log(chalk.gray("  │ ") + line);
+            console.log(chalk.gray("  └─"));
+          } else {
+            console.log(chalk.gray("  (no README found)"));
+          }
+          const ok = await confirm(`  Create a repo and add ${chalk.cyan(name)} to GitHub?`);
+          if (!ok) {
+            summary.skipped++;
+            console.log(`  ${icons.skipped}  ${chalk.cyan(name)} ${chalk.gray("(declined)")}`);
+            continue;
+          }
+        }
+
         const result = pushToGitHub(folder, name, opts);
         summary[result.status]++;
         console.log(`  ${icons[result.status]}  ${result.detail}`);
